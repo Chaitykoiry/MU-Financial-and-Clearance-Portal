@@ -6,3 +6,4 @@ const { verifyToken, requireRole } = require('../middleware/auth');
 router.get('/', verifyToken, requireRole('ADMIN'), getAuditLogs);
 
 module.exports = router;
+

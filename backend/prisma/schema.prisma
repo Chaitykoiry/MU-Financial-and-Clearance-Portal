@@ -142,3 +142,4 @@ model AuditLog {
   ipAddress  String?
   createdAt  DateTime @default(now())
 }
+

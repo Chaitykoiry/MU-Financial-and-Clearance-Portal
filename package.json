@@ -9,6 +9,7 @@
     "build:frontend": "npm --prefix frontend run build",
     "prisma:generate": "npm --prefix backend run prisma:generate",
     "prisma:migrate": "npm --prefix backend run prisma:migrate",
+    "setup:db": "npm --prefix backend run setup:db --",
     "seed": "npm --prefix backend run seed"
   },
   "keywords": [
@@ -25,3 +26,4 @@
   "author": "",
   "license": "ISC"
 }
+

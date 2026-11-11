@@ -140,3 +140,4 @@ Run both servers:
    - Embeds the QR code and digital seal into the document.
 5. **Instant QR Verification**:
    Anyone scanning the QR code or visiting `/verify` can immediately verify the certificate's validity, student details, and departmental audit timestamps.
+

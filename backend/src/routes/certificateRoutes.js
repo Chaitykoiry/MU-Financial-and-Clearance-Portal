@@ -10,3 +10,4 @@ router.get('/verify/:code', verifyCertificatePublic);
 router.get('/download/:clearanceRequestId', verifyToken, downloadCertificate);
 
 module.exports = router;
+

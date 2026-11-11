@@ -25,3 +25,4 @@ async function recordAuditLog({ userId, action, entityType, entityId, details, r
 module.exports = {
   recordAuditLog
 };
+

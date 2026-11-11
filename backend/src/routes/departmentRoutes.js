@@ -7,3 +7,4 @@ router.get('/', getDepartments);
 router.post('/', verifyToken, requireRole('ADMIN'), createDepartment);
 
 module.exports = router;
+

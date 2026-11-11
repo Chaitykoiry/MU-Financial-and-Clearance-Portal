@@ -26,3 +26,4 @@ const getAuditLogs = async (req, res) => {
 module.exports = {
   getAuditLogs
 };
+

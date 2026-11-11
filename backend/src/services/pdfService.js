@@ -175,3 +175,4 @@ async function generateClearanceCertificate(clearance, verificationBaseUrl) {
 module.exports = {
   generateClearanceCertificate
 };
+
