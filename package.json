@@ -1,0 +1,27 @@
+{
+  "name": "centralised-payment-clearance-system",
+  "version": "1.0.0",
+  "description": "Centralised Payment and Clearance System (CPCS) - Fullstack React & Node.js/Express with PostgreSQL Prisma and PDFKit QR Certificate Stamping",
+  "scripts": {
+    "dev": "npm --prefix backend run dev",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "dev:backend": "npm --prefix backend run dev",
+    "build:frontend": "npm --prefix frontend run build",
+    "prisma:generate": "npm --prefix backend run prisma:generate",
+    "prisma:migrate": "npm --prefix backend run prisma:migrate",
+    "seed": "npm --prefix backend run seed"
+  },
+  "keywords": [
+    "clearance-system",
+    "react",
+    "nodejs",
+    "express",
+    "postgresql",
+    "prisma",
+    "pdfkit",
+    "qrcode",
+    "tailwind"
+  ],
+  "author": "",
+  "license": "ISC"
+}

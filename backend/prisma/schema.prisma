@@ -1,0 +1,144 @@
+// Prisma schema for Centralised Payment and Clearance System (CPCS)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  STUDENT
+  DEPARTMENT_OFFICER
+  ADMIN
+}
+
+enum ClearanceType {
+  GRADUATION
+  SEMESTER
+  WITHDRAWAL
+  GENERAL
+}
+
+enum ClearanceStatus {
+  PENDING
+  IN_PROGRESS
+  APPROVED
+  REJECTED
+  HOLD
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  HOLD
+}
+
+enum PaymentStatus {
+  SUCCESS
+  PENDING
+  FAILED
+}
+
+model User {
+  id              String         @id @default(uuid())
+  email           String         @unique
+  password        String
+  fullName        String
+  matricOrStaffId String         @unique
+  role            Role           @default(STUDENT)
+  departmentId    String?
+  department      Department?    @relation(fields: [departmentId], references: [id])
+  
+  clearanceRequests ClearanceRequest[]
+  approvedClearances DepartmentApproval[] @relation("OfficerApprovals")
+  payments        Payment[]
+  auditLogs       AuditLog[]
+
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+}
+
+model Department {
+  id              String         @id @default(uuid())
+  code            String         @unique // e.g. "LIBRARY", "BURSAR", "HOSTEL", "SPORTS", "DEPT_HEAD"
+  name            String
+  description     String?
+  requiresPayment Boolean        @default(false)
+  officers        User[]
+  approvals       DepartmentApproval[]
+  payments        Payment[]
+
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+}
+
+model ClearanceRequest {
+  id              String            @id @default(uuid())
+  studentId       String
+  student         User              @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  academicSession String            // e.g. "2025/2026"
+  clearanceType   ClearanceType     @default(GRADUATION)
+  status          ClearanceStatus   @default(PENDING)
+  rejectionReason String?
+  certificateCode String?           @unique // e.g. "CPCS-CERT-12345678"
+  issuedAt        DateTime?
+
+  departmentApprovals DepartmentApproval[]
+  payments            Payment[]
+
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+}
+
+model DepartmentApproval {
+  id                 String           @id @default(uuid())
+  clearanceRequestId String
+  clearanceRequest   ClearanceRequest @relation(fields: [clearanceRequestId], references: [id], onDelete: Cascade)
+  departmentId       String
+  department         Department       @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  officerId          String?
+  officer            User?            @relation("OfficerApprovals", fields: [officerId], references: [id])
+  status             ApprovalStatus   @default(PENDING)
+  duesAmount         Float            @default(0.0)
+  duesPaid           Boolean          @default(true)
+  remarks            String?
+  actionDate         DateTime?
+
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  @@unique([clearanceRequestId, departmentId])
+}
+
+model Payment {
+  id                 String            @id @default(uuid())
+  studentId          String
+  student            User              @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  departmentId       String?
+  department         Department?       @relation(fields: [departmentId], references: [id])
+  clearanceRequestId String?
+  clearanceRequest   ClearanceRequest? @relation(fields: [clearanceRequestId], references: [id])
+  amount             Float
+  reference          String            @unique
+  purpose            String
+  status             PaymentStatus     @default(SUCCESS)
+  paymentMethod      String            @default("CARD")
+  paidAt             DateTime          @default(now())
+  createdAt          DateTime          @default(now())
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action     String   // e.g. "CLEARANCE_INITIATED", "DEPT_APPROVED", "PAYMENT_VERIFIED", "CERTIFICATE_ISSUED"
+  entityType String   // e.g. "CLEARANCE_REQUEST", "PAYMENT", "APPROVAL"
+  entityId   String?
+  details    String?  // JSON formatted or descriptive details
+  ipAddress  String?
+  createdAt  DateTime @default(now())
+}
