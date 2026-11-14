@@ -10,7 +10,7 @@ async function recordAuditLog({ userId, action, entityType, entityId, details, r
     await prisma.auditLog.create({
       data: {
         userId: userId || null,
-        action,
+        actionTag: action,
         entityType,
         entityId: entityId ? String(entityId) : null,
         details: typeof details === 'object' ? JSON.stringify(details) : details,

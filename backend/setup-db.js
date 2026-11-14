@@ -158,7 +158,7 @@ async function main() {
   // 6. Push Prisma Schema
   console.log('\n🔄 Generating tables and pushing schema via Prisma...');
   try {
-    execSync('npx prisma db push --accept-data-loss', {
+    execSync('npx prisma db push --accept-data-loss --skip-generate', {
       cwd: __dirname,
       stdio: 'inherit'
     });
@@ -193,3 +193,4 @@ main().catch((err) => {
   console.error('Unexpected error during auto setup:', err);
   process.exit(1);
 });
+

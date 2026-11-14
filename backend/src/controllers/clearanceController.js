@@ -3,325 +3,478 @@ const { recordAuditLog } = require('../middleware/audit');
 const crypto = require('crypto');
 
 /**
- * Initiates a new clearance request for the logged-in student.
- * Creates approval placeholders for each department in the system.
+ * Initiates a new clearance application for Metropolitan University student.
+ * Creates stage instances for all stages configured in the active workflow template.
  */
 const initiateClearance = async (req, res) => {
   try {
-    const studentId = req.user.id;
-    const { academicSession, clearanceType } = req.body;
+    const userId = req.user.id;
+    const { academicSession = 'Spring 2026', clearanceTypeCode = 'CONVOCATION' } = req.body;
 
-    if (!academicSession) {
-      return res.status(400).json({ success: false, message: 'Academic session is required (e.g. 2025/2026).' });
+    // 1. Resolve or auto-create StudentProfile if not yet created
+    let studentProfile = await prisma.studentProfile.findFirst({
+      where: { userId }
+    });
+
+    if (!studentProfile) {
+      // Find default programme (CSE)
+      const defaultProg = await prisma.programme.findFirst();
+      studentProfile = await prisma.studentProfile.create({
+        data: {
+          userId,
+          studentIdNumber: req.user.matricOrStaffId || `231-115-${Math.floor(100 + Math.random() * 900)}`,
+          programmeId: defaultProg.id,
+          batchNumber: 56,
+          currentSemester: 8,
+          cgpa: 3.75
+        }
+      });
     }
 
-    // Check if user already has a pending or in-progress clearance
-    const existing = await prisma.clearanceRequest.findFirst({
+    // 2. Check for active clearance in progress
+    const activeApp = await prisma.clearanceApplication.findFirst({
       where: {
-        studentId,
-        status: { in: ['PENDING', 'IN_PROGRESS'] }
+        studentId: studentProfile.id,
+        status: { in: ['SUBMITTED', 'IN_PROGRESS', 'FLAGGED'] }
       }
     });
 
-    if (existing) {
+    if (activeApp) {
       return res.status(400).json({
         success: false,
-        message: 'You already have an active clearance request in progress.',
-        clearanceId: existing.id
+        message: 'You already have an active clearance application in progress.',
+        applicationId: activeApp.id
       });
     }
 
-    // Retrieve all departments
-    const departments = await prisma.department.findMany({
-      orderBy: { name: 'asc' }
+    // 3. Resolve ClearanceType and Active Workflow
+    let clearanceType = await prisma.clearanceType.findFirst({
+      where: { code: clearanceTypeCode }
     });
 
-    if (departments.length === 0) {
+    if (!clearanceType) {
+      clearanceType = await prisma.clearanceType.findFirst();
+    }
+
+    const workflowTemplate = await prisma.workflowTemplate.findFirst({
+      where: { clearanceTypeId: clearanceType.id, isActive: true },
+      include: {
+        versions: {
+          where: { isPublished: true },
+          include: { stages: { orderBy: { sequenceOrder: 'asc' } } },
+          orderBy: { versionNumber: 'desc' },
+          take: 1
+        }
+      }
+    });
+
+    const activeVersion = workflowTemplate?.versions?.[0];
+    if (!activeVersion || !activeVersion.stages.length) {
       return res.status(400).json({
         success: false,
-        message: 'No institutional departments configured in the system.'
+        message: 'No published workflow template available for this clearance event.'
       });
     }
 
-    // Create clearance request and department approval rows in a transaction
-    const clearance = await prisma.$transaction(async (tx) => {
-      const newRequest = await tx.clearanceRequest.create({
+    const appNumber = `MU-CLR-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+    // 4. Create ClearanceApplication and Stage Instances in transaction
+    const application = await prisma.$transaction(async (tx) => {
+      const app = await tx.clearanceApplication.create({
         data: {
-          studentId,
+          applicationNumber: appNumber,
+          studentId: studentProfile.id,
+          clearanceTypeId: clearanceType.id,
+          workflowVersionId: activeVersion.id,
           academicSession,
-          clearanceType: clearanceType || 'GRADUATION',
           status: 'IN_PROGRESS'
         }
       });
 
-      // Prepare department approvals
-      const approvalData = departments.map((dept) => ({
-        clearanceRequestId: newRequest.id,
-        departmentId: dept.id,
-        status: 'PENDING',
-        duesAmount: dept.requiresPayment ? 100.0 : 0.0, // demo dues for payment-required depts
-        duesPaid: dept.requiresPayment ? false : true
-      }));
-
-      await tx.departmentApproval.createMany({
-        data: approvalData
+      // Instantiate each stage (Strictly Accounts, Library, and Department Head)
+      const allowedStages = activeVersion.stages.filter((stage) => {
+        const code = (stage.departmentCode || '').toUpperCase();
+        const name = (stage.stageName || '').toLowerCase();
+        return (
+          code === 'ACCOUNTS' ||
+          code === 'LIBRARY' ||
+          code === 'CSE' ||
+          code === 'SWE' ||
+          code === 'EEE' ||
+          code === 'BBA' ||
+          code === 'LAW' ||
+          code === 'ENG' ||
+          code === 'ECO' ||
+          code === 'DEPT_HEAD' ||
+          name.includes('accounts') ||
+          name.includes('library') ||
+          name.includes('head')
+        );
       });
 
-      return newRequest;
-    });
-
-    const fullClearance = await prisma.clearanceRequest.findUnique({
-      where: { id: clearance.id },
-      include: {
-        departmentApprovals: {
-          include: { department: true }
-        }
+      for (let i = 0; i < allowedStages.length; i++) {
+        const stage = allowedStages[i];
+        await tx.clearanceStageInstance.create({
+          data: {
+            applicationId: app.id,
+            workflowStageId: stage.id,
+            status: i === 0 ? 'PENDING' : 'LOCKED'
+          }
+        });
       }
+
+      return app;
     });
 
     await recordAuditLog({
-      userId: studentId,
-      action: 'CLEARANCE_INITIATED',
-      entityType: 'CLEARANCE_REQUEST',
-      entityId: clearance.id,
-      details: { academicSession, clearanceType: clearance.clearanceType },
+      userId,
+      action: 'CLEARANCE_APPLICATION_SUBMITTED',
+      entityType: 'CLEARANCE_APPLICATION',
+      entityId: application.id,
+      details: { applicationNumber: appNumber, academicSession, clearanceType: clearanceType.code },
       req
+    });
+
+    const fullApp = await prisma.clearanceApplication.findUnique({
+      where: { id: application.id },
+      include: {
+        clearanceType: true,
+        stageInstances: {
+          include: { workflowStage: true, assignedOfficer: { select: { fullName: true } } }
+        }
+      }
     });
 
     res.status(201).json({
       success: true,
-      message: 'Clearance request initiated successfully across all departments.',
-      clearance: fullClearance
+      message: 'Metropolitan University clearance application submitted successfully.',
+      clearance: formatApplicationForClient(fullApp)
     });
   } catch (error) {
-    console.error('Error initiating clearance:', error);
-    res.status(500).json({ success: false, message: 'Failed to initiate clearance request.' });
+    console.error('Clearance initiation error:', error);
+    res.status(500).json({ success: false, message: 'Failed to initiate clearance application.' });
   }
 };
 
 /**
- * Returns all clearance requests for the authenticated student.
+ * Returns student's clearance applications with stage breakdown.
  */
 const getMyClearances = async (req, res) => {
   try {
-    const studentId = req.user.id;
-    const clearances = await prisma.clearanceRequest.findMany({
-      where: { studentId },
+    const userId = req.user.id;
+    const studentProfile = await prisma.studentProfile.findFirst({
+      where: { userId }
+    });
+
+    if (!studentProfile) {
+      return res.json({ success: true, clearances: [] });
+    }
+
+    const applications = await prisma.clearanceApplication.findMany({
+      where: { studentId: studentProfile.id },
       include: {
-        departmentApprovals: {
+        clearanceType: true,
+        certificate: { include: { verificationToken: true } },
+        stageInstances: {
           include: {
-            department: true,
-            officer: { select: { fullName: true, email: true } }
-          }
-        },
-        payments: true
+            workflowStage: true,
+            assignedOfficer: { select: { fullName: true } },
+            issues: true
+          },
+          orderBy: { workflowStage: { sequenceOrder: 'asc' } }
+        }
       },
       orderBy: { createdAt: 'desc' }
     });
 
-    res.json({ success: true, clearances });
+    const formatted = applications.map(formatApplicationForClient);
+    res.json({ success: true, clearances: formatted });
   } catch (error) {
-    res.status(500).json({ success: false, message: 'Failed to fetch clearance requests.' });
+    console.error('Error fetching student clearances:', error);
+    res.status(500).json({ success: false, message: 'Failed to load clearance records.' });
   }
 };
 
 /**
- * Get details of a single clearance request.
+ * Review queue for department officers and admin.
  */
-const getClearanceById = async (req, res) => {
+const getAllClearances = async (req, res) => {
   try {
-    const { id } = req.params;
-    const clearance = await prisma.clearanceRequest.findUnique({
-      where: { id },
+    const applications = await prisma.clearanceApplication.findMany({
       include: {
         student: {
-          select: { id: true, fullName: true, matricOrStaffId: true, email: true }
-        },
-        departmentApprovals: {
           include: {
-            department: true,
-            officer: { select: { fullName: true, email: true } }
+            user: { select: { fullName: true, email: true, matricOrStaffId: true } },
+            programme: true
           }
         },
-        payments: true
-      }
+        clearanceType: true,
+        certificate: { include: { verificationToken: true } },
+        stageInstances: {
+          include: {
+            workflowStage: true,
+            assignedOfficer: { select: { fullName: true } },
+            issues: true
+          },
+          orderBy: { workflowStage: { sequenceOrder: 'asc' } }
+        }
+      },
+      orderBy: { createdAt: 'desc' }
     });
 
-    if (!clearance) {
-      return res.status(404).json({ success: false, message: 'Clearance request not found.' });
-    }
-
-    // Role check: Only the student themselves, an officer, or an admin can view
-    if (
-      req.user.role === 'STUDENT' &&
-      clearance.studentId !== req.user.id
-    ) {
-      return res.status(403).json({ success: false, message: 'Unauthorized access to this clearance record.' });
-    }
-
-    res.json({ success: true, clearance });
+    const formatted = applications.map(formatApplicationForClient);
+    res.json({ success: true, count: formatted.length, clearances: formatted });
   } catch (error) {
-    res.status(500).json({ success: false, message: 'Failed to fetch clearance details.' });
+    console.error('Error fetching applications list:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch applications.' });
   }
 };
 
 /**
- * Action by Department Officer to Approve, Reject, or Hold clearance for their department.
+ * Officer sign-off or flagging action for a clearance stage.
  */
 const updateDepartmentApproval = async (req, res) => {
   try {
     const { clearanceRequestId, departmentId } = req.params;
-    const { status, duesAmount, duesPaid, remarks } = req.body;
+    const { status, remarks, duesAmount } = req.body;
     const officerId = req.user.id;
 
-    // Validate that officer is authorized for this department if role is DEPARTMENT_OFFICER
-    if (req.user.role === 'DEPARTMENT_OFFICER' && req.user.departmentId !== departmentId) {
-      return res.status(403).json({
-        success: false,
-        message: 'You are only authorized to sign off for your designated department.'
-      });
-    }
-
-    const approval = await prisma.departmentApproval.findUnique({
-      where: {
-        clearanceRequestId_departmentId: {
-          clearanceRequestId,
-          departmentId
-        }
-      },
-      include: { department: true }
-    });
-
-    if (!approval) {
-      return res.status(404).json({ success: false, message: 'Department approval record not found.' });
-    }
-
-    // Update approval status
-    const updatedApproval = await prisma.departmentApproval.update({
-      where: {
-        clearanceRequestId_departmentId: {
-          clearanceRequestId,
-          departmentId
-        }
-      },
-      data: {
-        status: status || approval.status,
-        duesAmount: duesAmount !== undefined ? parseFloat(duesAmount) : approval.duesAmount,
-        duesPaid: duesPaid !== undefined ? Boolean(duesPaid) : approval.duesPaid,
-        remarks: remarks !== undefined ? remarks : approval.remarks,
-        officerId,
-        actionDate: new Date()
-      },
-      include: { department: true, officer: { select: { fullName: true } } }
-    });
-
-    await recordAuditLog({
-      userId: officerId,
-      action: `DEPT_${status || 'UPDATED'}`,
-      entityType: 'DEPARTMENT_APPROVAL',
-      entityId: updatedApproval.id,
-      details: {
-        clearanceRequestId,
-        departmentCode: updatedApproval.department.code,
-        status,
-        remarks
-      },
-      req
-    });
-
-    // Check clearance pipeline: are ALL departments now APPROVED and no unpaid dues?
-    const allApprovals = await prisma.departmentApproval.findMany({
-      where: { clearanceRequestId }
-    });
-
-    const allApproved = allApprovals.every((a) => a.status === 'APPROVED' && a.duesPaid === true);
-    const anyRejected = allApprovals.some((a) => a.status === 'REJECTED');
-
-    let updatedRequestStatus = 'IN_PROGRESS';
-    let certificateCode = null;
-    let issuedAt = null;
-
-    if (anyRejected) {
-      updatedRequestStatus = 'REJECTED';
-    } else if (allApproved) {
-      updatedRequestStatus = 'APPROVED';
-      certificateCode = `CPCS-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
-      issuedAt = new Date();
-    }
-
-    const updatedClearance = await prisma.clearanceRequest.update({
+    // Find the stage instance for this application
+    const application = await prisma.clearanceApplication.findUnique({
       where: { id: clearanceRequestId },
-      data: {
-        status: updatedRequestStatus,
-        ...(certificateCode && { certificateCode, issuedAt })
-      },
       include: {
-        student: { select: { id: true, fullName: true, matricOrStaffId: true, email: true } },
-        departmentApprovals: {
-          include: { department: true, officer: { select: { fullName: true } } }
+        stageInstances: {
+          include: { workflowStage: true }
         }
       }
     });
 
-    if (updatedRequestStatus === 'APPROVED') {
+    if (!application) {
+      return res.status(404).json({ success: false, message: 'Clearance application not found.' });
+    }
+
+    // Match stage instance by department code or stage ID
+    let stageInstance = application.stageInstances.find(
+      (si) => si.id === departmentId || si.workflowStage?.departmentCode === departmentId
+    );
+
+    if (!stageInstance && application.stageInstances.length > 0) {
+      stageInstance = application.stageInstances[0];
+    }
+
+    if (!stageInstance) {
+      return res.status(404).json({ success: false, message: 'Clearance stage instance not found.' });
+    }
+
+    // Update Stage Instance
+    const updatedStage = await prisma.clearanceStageInstance.update({
+      where: { id: stageInstance.id },
+      data: {
+        status: status || 'APPROVED',
+        assignedOfficerId: officerId,
+        decidedAt: new Date(),
+        officerRemarks: remarks || null
+      },
+      include: { workflowStage: true }
+    });
+
+    // If flagged with dues, create an issue record
+    if (status === 'FLAGGED' && duesAmount > 0) {
+      await prisma.clearanceIssue.create({
+        data: {
+          stageInstanceId: stageInstance.id,
+          flagReason: remarks || 'Outstanding departmental liabilities require settlement.',
+          duesAmountBdt: parseFloat(duesAmount)
+        }
+      });
+    }
+
+    await recordAuditLog({
+      userId: officerId,
+      action: `CLEARANCE_STAGE_${status}`,
+      entityType: 'CLEARANCE_STAGE',
+      entityId: stageInstance.id,
+      details: { applicationId: application.id, stageName: updatedStage.workflowStage.stageName, status },
+      req
+    });
+
+    // Check pipeline progression across required clearance units (Accounts, Library, Dept Head)
+    const allStages = await prisma.clearanceStageInstance.findMany({
+      where: { applicationId: application.id },
+      include: { workflowStage: true },
+      orderBy: { workflowStage: { sequenceOrder: 'asc' } }
+    });
+
+    const requiredStages = allStages.filter((si) => {
+      const code = (si.workflowStage?.departmentCode || '').toUpperCase();
+      const name = (si.workflowStage?.stageName || '').toLowerCase();
+      return (
+        code === 'ACCOUNTS' ||
+        code === 'LIBRARY' ||
+        code === 'CSE' ||
+        code === 'SWE' ||
+        code === 'EEE' ||
+        code === 'BBA' ||
+        code === 'LAW' ||
+        code === 'ENG' ||
+        code === 'ECO' ||
+        code === 'DEPT_HEAD' ||
+        name.includes('accounts') ||
+        name.includes('library') ||
+        name.includes('head')
+      );
+    });
+
+    const activeStagesToEvaluate = requiredStages.length > 0 ? requiredStages : allStages;
+    const allApproved = activeStagesToEvaluate.every((s) => s.status === 'APPROVED');
+    const anyFlagged = activeStagesToEvaluate.some((s) => s.status === 'FLAGGED');
+    const anyRejected = activeStagesToEvaluate.some((s) => s.status === 'REJECTED');
+
+    let overallStatus = 'IN_PROGRESS';
+    let certificateRecord = null;
+
+    if (anyRejected) {
+      overallStatus = 'REJECTED';
+    } else if (anyFlagged) {
+      overallStatus = 'FLAGGED';
+    } else if (allApproved) {
+      overallStatus = 'APPROVED';
+
+      // Auto-issue Certificate
+      const certNumber = `MU-CERT-${new Date().getFullYear()}-${Math.floor(10000 + Math.random() * 90000)}`;
+      const vLookupCode = `MU-VTOK-${Math.floor(100000 + Math.random() * 900000)}`;
+      const cryptoToken = crypto.randomBytes(32).toString('hex');
+
+      certificateRecord = await prisma.certificate.upsert({
+        where: { applicationId: application.id },
+        update: { isRevoked: false },
+        create: {
+          certificateNumber: certNumber,
+          applicationId: application.id,
+          studentId: application.studentId,
+          certificateType: 'OFFICIAL_CLEARANCE_CERTIFICATE'
+        }
+      });
+
+      await prisma.certificateVerificationToken.upsert({
+        where: { certificateId: certificateRecord.id },
+        update: {},
+        create: {
+          certificateId: certificateRecord.id,
+          cryptographicToken: cryptoToken,
+          publicLookupCode: vLookupCode
+        }
+      });
+
       await recordAuditLog({
         userId: officerId,
-        action: 'CLEARANCE_FULLY_APPROVED',
-        entityType: 'CLEARANCE_REQUEST',
-        entityId: clearanceRequestId,
-        details: { certificateCode, totalDepartments: allApprovals.length },
+        action: 'CLEARANCE_CERTIFICATE_ISSUED',
+        entityType: 'CERTIFICATE',
+        entityId: certificateRecord.id,
+        details: { certificateNumber: certNumber, publicLookupCode: vLookupCode },
         req
       });
     }
 
+    // Unlock next stage if sequential
+    if (status === 'APPROVED') {
+      const currentIndex = allStages.findIndex((s) => s.id === stageInstance.id);
+      if (currentIndex >= 0 && currentIndex + 1 < allStages.length) {
+        const nextStage = allStages[currentIndex + 1];
+        if (nextStage.status === 'LOCKED') {
+          await prisma.clearanceStageInstance.update({
+            where: { id: nextStage.id },
+            data: { status: 'PENDING' }
+          });
+        }
+      }
+    }
+
+    await prisma.clearanceApplication.update({
+      where: { id: application.id },
+      data: {
+        status: overallStatus,
+        certificateIssued: allApproved
+      }
+    });
+
     res.json({
       success: true,
-      message: `Department sign-off recorded as ${status}.`,
-      approval: updatedApproval,
-      clearance: updatedClearance
+      message: `Stage sign-off recorded as ${status}.`,
+      stage: updatedStage
     });
   } catch (error) {
-    console.error('Error updating department clearance:', error);
-    res.status(500).json({ success: false, message: 'Failed to update department clearance.' });
+    console.error('Error updating clearance stage:', error);
+    res.status(500).json({ success: false, message: 'Failed to update clearance stage.' });
   }
 };
 
 /**
- * List all clearance requests (Officer & Admin view).
+ * Formats a clearance application to match frontend client models.
  */
-const getAllClearances = async (req, res) => {
-  try {
-    const { status, session } = req.query;
+function formatApplicationForClient(app) {
+  const student = app.student;
+  const user = student?.user;
 
-    const where = {};
-    if (status) where.status = status;
-    if (session) where.academicSession = session;
+  // Keep strictly Accounts & Finance, Library, and Department Head (rest are not required)
+  const allowedStageInstances = (app.stageInstances || []).filter((si) => {
+    const code = (si.workflowStage?.departmentCode || '').toUpperCase();
+    const name = (si.workflowStage?.stageName || '').toLowerCase();
+    return (
+      code === 'ACCOUNTS' ||
+      code === 'LIBRARY' ||
+      code === 'CSE' ||
+      code === 'SWE' ||
+      code === 'EEE' ||
+      code === 'BBA' ||
+      code === 'LAW' ||
+      code === 'ENG' ||
+      code === 'ECO' ||
+      code === 'DEPT_HEAD' ||
+      name.includes('accounts') ||
+      name.includes('library') ||
+      name.includes('head')
+    );
+  });
 
-    const clearances = await prisma.clearanceRequest.findMany({
-      where,
-      include: {
-        student: {
-          select: { id: true, fullName: true, matricOrStaffId: true, email: true }
-        },
-        departmentApprovals: {
-          include: { department: true, officer: { select: { fullName: true } } }
-        },
-        payments: true
+  return {
+    id: app.id,
+    applicationNumber: app.applicationNumber,
+    clearanceType: app.clearanceType?.title || 'Graduation & Convocation Clearance',
+    academicSession: app.academicSession,
+    status: app.status,
+    certificateCode: app.certificate?.verificationToken?.publicLookupCode || app.certificate?.certificateNumber,
+    certificateIssued: app.certificateIssued,
+    issuedAt: app.certificate?.issueDate,
+    createdAt: app.createdAt,
+    student: {
+      id: student?.id,
+      fullName: user?.fullName || student?.fullName || 'Student',
+      matricOrStaffId: student?.studentIdNumber || user?.matricOrStaffId || '231-115-094',
+      email: user?.email,
+      programme: student?.programme?.title || 'B.Sc. in Computer Science & Engineering'
+    },
+    departmentApprovals: allowedStageInstances.map((si, idx) => ({
+      id: si.id,
+      departmentId: si.workflowStage?.departmentCode || si.id,
+      department: {
+        code: si.workflowStage?.departmentCode || 'DEPT',
+        name: si.workflowStage?.stageName || 'Department Stage',
+        description: `Metropolitan University clearance stage ${idx + 1}`
       },
-      orderBy: { createdAt: 'desc' }
-    });
-
-    res.json({ success: true, count: clearances.length, clearances });
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Failed to fetch clearances list.' });
-  }
-};
+      status: si.status,
+      duesAmount: si.issues?.reduce((acc, iss) => acc + (iss.isResolved ? 0 : iss.duesAmountBdt), 0) || 0,
+      duesPaid: !si.issues?.some((iss) => !iss.isResolved && iss.duesAmountBdt > 0),
+      remarks: si.officerRemarks,
+      officer: si.assignedOfficer,
+      actionDate: si.decidedAt
+    }))
+  };
+}
 
 module.exports = {
   initiateClearance,
   getMyClearances,
-  getClearanceById,
-  updateDepartmentApproval,
-  getAllClearances
+  getAllClearances,
+  updateDepartmentApproval
 };
-

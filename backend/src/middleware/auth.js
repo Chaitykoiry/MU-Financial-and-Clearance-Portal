@@ -21,7 +21,7 @@ const verifyToken = async (req, res, next) => {
     }
 
     // Attach user without password
-    const { password, ...safeUser } = user;
+    const { passwordHash, ...safeUser } = user;
     req.user = safeUser;
     next();
   } catch (error) {

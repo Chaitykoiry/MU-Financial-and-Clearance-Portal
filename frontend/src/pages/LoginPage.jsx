@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { authApi } from '../services/api';
-import { ShieldCheck, Lock, User, AlertCircle, Sparkles } from 'lucide-react';
+import { GraduationCap, Lock, User, AlertCircle, Sparkles, Building, ShieldCheck } from 'lucide-react';
 
 export default function LoginPage() {
   const [identifier, setIdentifier] = useState('');
@@ -23,12 +23,11 @@ export default function LoginPage() {
         login(res.data.token, res.data.user);
         const role = res.data.user.role;
         if (role === 'STUDENT') navigate('/student');
-        else if (role === 'DEPARTMENT_OFFICER') navigate('/officer');
-        else if (role === 'ADMIN') navigate('/admin');
-        else navigate('/');
+        else if (role === 'SUPER_ADMIN') navigate('/admin');
+        else navigate('/officer');
       }
     } catch (err) {
-      setError(err.response?.data?.message || 'Login failed. Please check your credentials.');
+      setError(err.response?.data?.message || 'Login failed. Please verify your credentials.');
     } finally {
       setLoading(false);
     }
@@ -40,103 +39,125 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-[calc(100vh-4rem)] flex items-center justify-center p-4 bg-slate-50">
-      <div className="max-w-md w-full bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden">
-        {/* Banner */}
-        <div className="bg-gradient-to-br from-blue-700 via-blue-800 to-indigo-900 p-8 text-white text-center relative">
-          <div className="inline-flex p-3 bg-white/10 backdrop-blur-md rounded-2xl mb-3 shadow-inner">
-            <ShieldCheck className="w-10 h-10 text-blue-200" />
+    <div className="min-h-[calc(100vh-4rem)] flex items-center justify-center p-4 bg-slate-100/70">
+      <div className="max-w-xl w-full bg-white rounded-3xl shadow-xl border border-slate-200 overflow-hidden">
+        {/* University Header Banner */}
+        <div className="bg-[#0f2b5c] p-7 text-white text-center relative">
+          <div className="inline-flex p-3 bg-white/10 backdrop-blur-md rounded-2xl mb-2.5 shadow-inner">
+            <GraduationCap className="w-9 h-9 text-amber-400" />
           </div>
-          <h1 className="text-2xl font-bold tracking-tight">Centralised Clearance Portal</h1>
-          <p className="text-blue-100 text-sm mt-1">
-            Single-sign-on verification & fee clearance pipeline
+          <h1 className="text-xl font-extrabold tracking-tight">METROPOLITAN UNIVERSITY</h1>
+          <p className="text-blue-200 text-xs mt-1">
+            Integrated Financial Management & Digital Clearance Portal (OSSC)
           </p>
+          <div className="inline-block mt-2 text-[10px] font-semibold bg-white/15 text-amber-300 px-3 py-0.5 rounded-full uppercase tracking-wider">
+            Bateshwar, Sylhet-3103, Bangladesh
+          </div>
         </div>
 
-        {/* Demo Fast Login Pills */}
-        <div className="p-6 pb-2 border-b border-slate-100 bg-slate-50/70">
-          <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2.5">
+        {/* Demo Fast Logins Section */}
+        <div className="p-5 border-b border-slate-100 bg-slate-50/80">
+          <div className="flex items-center gap-1.5 text-xs font-bold text-slate-600 uppercase tracking-wider mb-2.5">
             <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-            Quick Demo Logins (Click to autofill)
+            1-Click Demo Accounts (Metropolitan University Roster)
           </div>
-          <div className="grid grid-cols-2 gap-2 text-xs">
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
             <button
               type="button"
-              onClick={() => setDemoUser('student@cpcs.edu', 'student123')}
-              className="px-2.5 py-1.5 bg-white hover:bg-blue-50 border border-slate-200 hover:border-blue-300 rounded-lg text-slate-700 text-left font-medium transition shadow-xs"
+              onClick={() => setDemoUser('choyon@metrouni.edu.bd', 'student123')}
+              className="p-2 bg-white hover:bg-blue-50 border border-slate-200 hover:border-blue-300 rounded-xl text-left font-medium text-slate-800 transition"
             >
-              🎓 Cleared Student
+              🎓 <span className="font-bold">Choyon Dhor</span>
+              <div className="text-[10px] text-emerald-600 font-mono mt-0.5">Cleared (231-115-094)</div>
             </button>
+
             <button
               type="button"
-              onClick={() => setDemoUser('clara@cpcs.edu', 'student123')}
-              className="px-2.5 py-1.5 bg-white hover:bg-blue-50 border border-slate-200 hover:border-blue-300 rounded-lg text-slate-700 text-left font-medium transition shadow-xs"
+              onClick={() => setDemoUser('clara@metrouni.edu.bd', 'student123')}
+              className="p-2 bg-white hover:bg-blue-50 border border-slate-200 hover:border-blue-300 rounded-xl text-left font-medium text-slate-800 transition"
             >
-              ⏳ Pending Student
+              🎓 <span className="font-bold">Clara Oswald</span>
+              <div className="text-[10px] text-amber-600 font-mono mt-0.5">Pending (231-115-042)</div>
             </button>
+
             <button
               type="button"
-              onClick={() => setDemoUser('library@cpcs.edu', 'officer123')}
-              className="px-2.5 py-1.5 bg-white hover:bg-blue-50 border border-slate-200 hover:border-blue-300 rounded-lg text-slate-700 text-left font-medium transition shadow-xs"
+              onClick={() => setDemoUser('accounts@metrouni.edu.bd', 'officer123')}
+              className="p-2 bg-white hover:bg-blue-50 border border-slate-200 hover:border-blue-300 rounded-xl text-left font-medium text-slate-800 transition"
             >
-              📚 Library Officer
+              💰 <span className="font-bold">Accounts Section</span>
+              <div className="text-[10px] text-slate-500 mt-0.5">NRBC Bank Queue</div>
             </button>
+
             <button
               type="button"
-              onClick={() => setDemoUser('bursar@cpcs.edu', 'officer123')}
-              className="px-2.5 py-1.5 bg-white hover:bg-blue-50 border border-slate-200 hover:border-blue-300 rounded-lg text-slate-700 text-left font-medium transition shadow-xs"
+              onClick={() => setDemoUser('library@metrouni.edu.bd', 'officer123')}
+              className="p-2 bg-white hover:bg-blue-50 border border-slate-200 hover:border-blue-300 rounded-xl text-left font-medium text-slate-800 transition"
             >
-              💰 Bursary Officer
+              📚 <span className="font-bold">Central Library</span>
+              <div className="text-[10px] text-slate-500 mt-0.5">Prof. M. H. Rahman Lib</div>
             </button>
+
             <button
               type="button"
-              onClick={() => setDemoUser('admin@cpcs.edu', 'admin123')}
-              className="col-span-2 px-2.5 py-1.5 bg-white hover:bg-purple-50 border border-slate-200 hover:border-purple-300 rounded-lg text-purple-700 text-center font-medium transition shadow-xs"
+              onClick={() => setDemoUser('head.cse@metrouni.edu.bd', 'officer123')}
+              className="p-2 bg-white hover:bg-blue-50 border border-slate-200 hover:border-blue-300 rounded-xl text-left font-medium text-slate-800 transition"
             >
-              🛡️ System Administrator
+              🏛️ <span className="font-bold">Head of Dept</span>
+              <div className="text-[10px] text-slate-500 mt-0.5">Head of CSE Sign-off</div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setDemoUser('admin@metrouni.edu.bd', 'admin123')}
+              className="p-2 bg-white hover:bg-purple-50 border border-slate-200 hover:border-purple-300 rounded-xl text-left font-medium text-purple-800 transition"
+            >
+              🛡️ <span className="font-bold">Super Admin</span>
+              <div className="text-[10px] text-purple-600 mt-0.5">Workflow & Audits</div>
             </button>
           </div>
         </div>
 
-        {/* Form */}
+        {/* Credentials Form */}
         <form onSubmit={handleLogin} className="p-6 space-y-4">
           {error && (
-            <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl text-sm flex items-start gap-2.5">
-              <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+            <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl text-xs flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
               <span>{error}</span>
             </div>
           )}
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
-              Email or Matric / Staff ID
+            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+              Email or Student / Staff ID Number
             </label>
             <div className="relative">
-              <User className="w-5 h-5 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+              <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
                 required
                 value={identifier}
                 onChange={(e) => setIdentifier(e.target.value)}
-                placeholder="e.g. student@cpcs.edu or STU-2026-9041"
-                className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-900 text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
+                placeholder="e.g. 231-115-094 or choyon@metrouni.edu.bd"
+                className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0f2b5c] transition"
               />
             </div>
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
-              Password
+            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+              Portal Password
             </label>
             <div className="relative">
-              <Lock className="w-5 h-5 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+              <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
                 type="password"
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
-                className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-900 text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
+                className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0f2b5c] transition"
               />
             </div>
           </div>
@@ -144,20 +165,16 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-semibold rounded-xl text-sm shadow-md transition flex items-center justify-center gap-2"
+            className="w-full py-2.5 bg-[#0f2b5c] hover:bg-[#1a3d7c] disabled:opacity-50 text-white font-bold rounded-xl text-xs shadow-md transition flex items-center justify-center gap-2"
           >
-            {loading ? 'Authenticating...' : 'Sign In to Clearance Portal'}
+            {loading ? 'Authenticating...' : 'Sign In to Metropolitan University Portal'}
           </button>
 
-          <div className="text-center text-xs text-slate-500 pt-2">
-            Don't have an account?{' '}
-            <Link to="/register" className="text-blue-600 font-semibold hover:underline">
-              Register as Student
-            </Link>
+          <div className="text-center text-[11px] text-slate-500 pt-1">
+            Accounts Helpline: <span className="font-semibold text-slate-700">01757535844</span> • Campus Branch: NRBC Bank Bateshwar
           </div>
         </form>
       </div>
     </div>
   );
 }
-

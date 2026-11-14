@@ -5,7 +5,7 @@ const getAuditLogs = async (req, res) => {
     const { action, entityType, limit = 50 } = req.query;
 
     const where = {};
-    if (action) where.action = action;
+    if (action) where.actionTag = action;
     if (entityType) where.entityType = entityType;
 
     const logs = await prisma.auditLog.findMany({

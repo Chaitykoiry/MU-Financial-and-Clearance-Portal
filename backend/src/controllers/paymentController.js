@@ -3,85 +3,106 @@ const { recordAuditLog } = require('../middleware/audit');
 const crypto = require('crypto');
 
 /**
- * Simulates / processes a clearance or department dues payment.
+ * Processes a student fee payment or NRBC Bank deposit slip submission.
  */
 const processPayment = async (req, res) => {
   try {
-    const studentId = req.user.id;
-    const { clearanceRequestId, departmentId, amount, purpose, paymentMethod } = req.body;
+    const userId = req.user.id;
+    const {
+      amount,
+      purpose,
+      paymentMethod = 'NRBC_BANK_DEPOSIT',
+      bankBranch,
+      slipNumber,
+      invoiceId,
+      installmentId
+    } = req.body;
 
     if (!amount || amount <= 0) {
       return res.status(400).json({ success: false, message: 'Valid payment amount is required.' });
     }
 
-    const reference = `PAY-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+    // 1. Resolve StudentProfile
+    let studentProfile = await prisma.studentProfile.findFirst({
+      where: { userId }
+    });
 
-    // Execute payment and clearance update within transaction
-    const result = await prisma.$transaction(async (tx) => {
-      // 1. Record payment
-      const payment = await tx.payment.create({
+    if (!studentProfile) {
+      const defaultProg = await prisma.programme.findFirst();
+      studentProfile = await prisma.studentProfile.create({
         data: {
-          studentId,
-          clearanceRequestId: clearanceRequestId || null,
-          departmentId: departmentId || null,
-          amount: parseFloat(amount),
-          reference,
-          purpose: purpose || 'Department Clearance Dues Settlement',
-          paymentMethod: paymentMethod || 'CARD',
-          status: 'SUCCESS'
+          userId,
+          studentIdNumber: req.user.matricOrStaffId || `231-115-094`,
+          programmeId: defaultProg.id,
+          batchNumber: 56,
+          currentSemester: 8,
+          cgpa: 3.75
+        }
+      });
+    }
+
+    const txRef = `MU-PAY-${new Date().getFullYear()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+
+    // 2. Transaction execution
+    const payment = await prisma.$transaction(async (tx) => {
+      const isBankDeposit = paymentMethod === 'NRBC_BANK_DEPOSIT';
+      const status = isBankDeposit ? 'PENDING_VERIFICATION' : 'VERIFIED';
+
+      const record = await tx.paymentTransaction.create({
+        data: {
+          transactionReference: txRef,
+          studentId: studentProfile.id,
+          invoiceId: invoiceId || null,
+          installmentId: installmentId || null,
+          paymentMethod: isBankDeposit ? 'NRBC_BANK_DEPOSIT' : 'ONLINE_GATEWAY',
+          amountBdt: parseFloat(amount),
+          purpose: purpose || 'Spring Term 2026 Tuition Installment',
+          bankBranch: bankBranch || 'NRBC Bank, Metropolitan University Campus Branch, Bateshwar',
+          slipNumber: slipNumber || `SLIP-${Date.now().toString().slice(-6)}`,
+          status
         }
       });
 
-      // 2. If tied to a department approval, mark duesPaid = true
-      if (clearanceRequestId && departmentId) {
-        await tx.departmentApproval.updateMany({
-          where: {
-            clearanceRequestId,
-            departmentId
-          },
+      // If verified (online gateway), credit student ledger
+      if (status === 'VERIFIED') {
+        await tx.studentLedgerEntry.create({
           data: {
-            duesPaid: true,
-            duesAmount: 0.0
+            studentId: studentProfile.id,
+            entryType: 'CREDIT_PAYMENT',
+            amountBdt: parseFloat(amount),
+            runningBalanceBdt: 0.0,
+            referenceEntityType: 'PAYMENT_TRANSACTION',
+            referenceEntityId: record.id,
+            narration: purpose || 'Tuition Fee Settlement'
           }
         });
+
+        if (installmentId) {
+          await tx.installmentSchedule.update({
+            where: { id: installmentId },
+            data: { status: 'PAID' }
+          });
+        }
       }
 
-      return payment;
+      return record;
     });
 
     await recordAuditLog({
-      userId: studentId,
-      action: 'PAYMENT_PROCESSED',
-      entityType: 'PAYMENT',
-      entityId: result.id,
-      details: { reference, amount, purpose, clearanceRequestId, departmentId },
+      userId,
+      action: 'PAYMENT_TRANSACTION_SUBMITTED',
+      entityType: 'PAYMENT_TRANSACTION',
+      entityId: payment.id,
+      details: { transactionReference: txRef, amount, paymentMethod, slipNumber },
       req
     });
 
-    // Check if all approvals and payments are now settled
-    if (clearanceRequestId) {
-      const allApprovals = await prisma.departmentApproval.findMany({
-        where: { clearanceRequestId }
-      });
-
-      const allApproved = allApprovals.every((a) => a.status === 'APPROVED' && a.duesPaid === true);
-      if (allApproved) {
-        const certificateCode = `CPCS-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
-        await prisma.clearanceRequest.update({
-          where: { id: clearanceRequestId },
-          data: {
-            status: 'APPROVED',
-            certificateCode,
-            issuedAt: new Date()
-          }
-        });
-      }
-    }
-
     res.status(201).json({
       success: true,
-      message: 'Payment processed successfully.',
-      payment: result
+      message: payment.status === 'VERIFIED'
+        ? 'Payment processed and credited successfully.'
+        : 'Bank deposit slip submitted to Accounts Section for verification.',
+      payment
     });
   } catch (error) {
     console.error('Payment processing error:', error);
@@ -89,24 +110,36 @@ const processPayment = async (req, res) => {
   }
 };
 
+/**
+ * Returns student payment history.
+ */
 const getPaymentHistory = async (req, res) => {
   try {
-    const where = {};
+    const userId = req.user.id;
+    let where = {};
+
     if (req.user.role === 'STUDENT') {
-      where.studentId = req.user.id;
+      const studentProfile = await prisma.studentProfile.findFirst({ where: { userId } });
+      if (!studentProfile) return res.json({ success: true, count: 0, payments: [] });
+      where.studentId = studentProfile.id;
     }
 
-    const payments = await prisma.payment.findMany({
+    const payments = await prisma.paymentTransaction.findMany({
       where,
       include: {
-        student: { select: { fullName: true, matricOrStaffId: true, email: true } },
-        department: { select: { name: true, code: true } }
+        student: {
+          include: {
+            user: { select: { fullName: true, matricOrStaffId: true, email: true } },
+            programme: true
+          }
+        }
       },
       orderBy: { createdAt: 'desc' }
     });
 
     res.json({ success: true, count: payments.length, payments });
   } catch (error) {
+    console.error('Error fetching payments:', error);
     res.status(500).json({ success: false, message: 'Failed to fetch payment history.' });
   }
 };
@@ -115,4 +148,3 @@ module.exports = {
   processPayment,
   getPaymentHistory
 };
-

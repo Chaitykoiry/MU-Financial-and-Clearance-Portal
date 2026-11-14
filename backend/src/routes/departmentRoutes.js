@@ -4,7 +4,6 @@ const { getDepartments, createDepartment } = require('../controllers/departmentC
 const { verifyToken, requireRole } = require('../middleware/auth');
 
 router.get('/', getDepartments);
-router.post('/', verifyToken, requireRole('ADMIN'), createDepartment);
+router.post('/', verifyToken, requireRole('SUPER_ADMIN'), createDepartment);
 
 module.exports = router;
-

@@ -2,12 +2,27 @@ import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import Navbar from './components/Navbar';
+import LandingPage from './pages/LandingPage';
+import StudentLoginPage from './pages/StudentLoginPage';
+import AdminLoginPage from './pages/AdminLoginPage';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import StudentDashboard from './pages/StudentDashboard';
 import OfficerDashboard from './pages/OfficerDashboard';
+import AccountsQueuePage from './pages/AccountsQueuePage';
 import AdminDashboard from './pages/AdminDashboard';
 import VerifyCertificatePage from './pages/VerifyCertificatePage';
+import VerifyAdmitCardPage from './pages/VerifyAdmitCardPage';
+
+const ALL_OFFICER_ROLES = [
+  'SUPER_ADMIN',
+  'ACCOUNTS_OFFICER',
+  'LIBRARY_OFFICER',
+  'LAB_OFFICER',
+  'HALL_OFFICER',
+  'DEPT_HEAD',
+  'EXAM_CONTROLLER'
+];
 
 function ProtectedRoute({ children, allowedRoles }) {
   const { user, loading } = useAuth();
@@ -31,28 +46,6 @@ function ProtectedRoute({ children, allowedRoles }) {
   return children;
 }
 
-function RoleHomeRedirect() {
-  const { user, loading } = useAuth();
-
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50 text-slate-500 font-medium text-sm">
-        Loading...
-      </div>
-    );
-  }
-
-  if (!user) {
-    return <Navigate to="/login" replace />;
-  }
-
-  if (user.role === 'STUDENT') return <Navigate to="/student" replace />;
-  if (user.role === 'DEPARTMENT_OFFICER') return <Navigate to="/officer" replace />;
-  if (user.role === 'ADMIN') return <Navigate to="/admin" replace />;
-
-  return <Navigate to="/login" replace />;
-}
-
 export default function App() {
   return (
     <AuthProvider>
@@ -61,35 +54,50 @@ export default function App() {
           <Navbar />
           <main className="flex-1">
             <Routes>
-              <Route path="/" element={<RoleHomeRedirect />} />
+              {/* Landing Page */}
+              <Route path="/" element={<LandingPage />} />
+
+              {/* Dedicated Gateways */}
+              <Route path="/student/login" element={<StudentLoginPage />} />
+              <Route path="/admin/login" element={<AdminLoginPage />} />
               <Route path="/login" element={<LoginPage />} />
               <Route path="/register" element={<RegisterPage />} />
 
-              {/* Student Route */}
+              {/* Student Portal Route */}
               <Route
                 path="/student"
                 element={
-                  <ProtectedRoute allowedRoles={['STUDENT', 'ADMIN']}>
+                  <ProtectedRoute allowedRoles={['STUDENT', 'SUPER_ADMIN']}>
                     <StudentDashboard />
                   </ProtectedRoute>
                 }
               />
 
-              {/* Department Officer Route */}
+              {/* Accounts Section Verification Queue */}
+              <Route
+                path="/accounts/queue"
+                element={
+                  <ProtectedRoute allowedRoles={['ACCOUNTS_OFFICER', 'SUPER_ADMIN']}>
+                    <AccountsQueuePage />
+                  </ProtectedRoute>
+                }
+              />
+
+              {/* Department Officer Review Queues */}
               <Route
                 path="/officer"
                 element={
-                  <ProtectedRoute allowedRoles={['DEPARTMENT_OFFICER', 'ADMIN']}>
+                  <ProtectedRoute allowedRoles={ALL_OFFICER_ROLES}>
                     <OfficerDashboard />
                   </ProtectedRoute>
                 }
               />
 
-              {/* Admin Route */}
+              {/* Super Admin Routes */}
               <Route
                 path="/admin"
                 element={
-                  <ProtectedRoute allowedRoles={['ADMIN']}>
+                  <ProtectedRoute allowedRoles={['SUPER_ADMIN']}>
                     <AdminDashboard />
                   </ProtectedRoute>
                 }
@@ -97,15 +105,17 @@ export default function App() {
               <Route
                 path="/admin/audit"
                 element={
-                  <ProtectedRoute allowedRoles={['ADMIN']}>
+                  <ProtectedRoute allowedRoles={['SUPER_ADMIN']}>
                     <AdminDashboard />
                   </ProtectedRoute>
                 }
               />
 
-              {/* Public Certificate QR Verification */}
+              {/* Public Verifiers */}
               <Route path="/verify" element={<VerifyCertificatePage />} />
               <Route path="/verify-certificate/:code" element={<VerifyCertificatePage />} />
+              <Route path="/verify-admit-card/:token" element={<VerifyAdmitCardPage />} />
+              <Route path="/admit-card/verify/:token" element={<VerifyAdmitCardPage />} />
 
               {/* Fallback */}
               <Route path="*" element={<Navigate to="/" replace />} />

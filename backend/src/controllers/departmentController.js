@@ -6,7 +6,7 @@ const getDepartments = async (req, res) => {
     const departments = await prisma.department.findMany({
       include: {
         _count: {
-          select: { officers: true, approvals: true }
+          select: { users: true, programmes: true, workflowStages: true }
         }
       },
       orderBy: { name: 'asc' }
@@ -19,7 +19,7 @@ const getDepartments = async (req, res) => {
 
 const createDepartment = async (req, res) => {
   try {
-    const { code, name, description, requiresPayment } = req.body;
+    const { code, name, schoolName, description, isAcademic } = req.body;
     if (!code || !name) {
       return res.status(400).json({ success: false, message: 'Department code and name are required.' });
     }
@@ -33,8 +33,9 @@ const createDepartment = async (req, res) => {
       data: {
         code: code.toUpperCase().trim(),
         name,
+        schoolName: schoolName || 'Metropolitan University',
         description,
-        requiresPayment: Boolean(requiresPayment)
+        isAcademic: isAcademic !== undefined ? Boolean(isAcademic) : true
       }
     });
 

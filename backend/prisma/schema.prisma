@@ -1,7 +1,9 @@
-// Prisma schema for Centralised Payment and Clearance System (CPCS)
+// Metropolitan University — Integrated Financial Management & Digital Clearance Portal
+// Prisma schema for PostgreSQL 16/18
 
 generator client {
   provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
 }
 
 datasource db {
@@ -11,135 +13,701 @@ datasource db {
 
 enum Role {
   STUDENT
-  DEPARTMENT_OFFICER
-  ADMIN
+  ACCOUNTS_OFFICER
+  LIBRARY_OFFICER
+  LAB_OFFICER
+  HALL_OFFICER
+  DEPT_HEAD
+  EXAM_CONTROLLER
+  SUPER_ADMIN
 }
 
-enum ClearanceType {
-  GRADUATION
-  SEMESTER
-  WITHDRAWAL
-  GENERAL
+enum DegreeLevel {
+  UNDERGRADUATE
+  GRADUATE
 }
 
-enum ClearanceStatus {
+enum InvoiceStatus {
+  UNPAID
+  PARTIALLY_PAID
+  PAID
+  CANCELLED
+}
+
+enum InstallmentStatus {
   PENDING
-  IN_PROGRESS
-  APPROVED
-  REJECTED
-  HOLD
+  OVERDUE
+  PAID
 }
 
-enum ApprovalStatus {
-  PENDING
-  APPROVED
-  REJECTED
-  HOLD
+enum PaymentMethod {
+  NRBC_BANK_DEPOSIT
+  BKASH_MFS
+  NAGAD_MFS
+  ONLINE_GATEWAY
 }
 
 enum PaymentStatus {
-  SUCCESS
-  PENDING
+  INITIATED
+  PENDING_VERIFICATION
+  VERIFIED
+  REJECTED
   FAILED
+  REFUNDED
 }
 
+enum LedgerEntryType {
+  DEBIT_INVOICE
+  CREDIT_PAYMENT
+  CREDIT_WAIVER
+  DEBIT_PENALTY
+  DEBIT_ADJUSTMENT
+}
+
+enum ClearanceStatus {
+  DRAFT
+  SUBMITTED
+  IN_PROGRESS
+  APPROVED
+  FLAGGED
+  REJECTED
+  COMPLETED
+  CANCELLED
+}
+
+enum StageStatus {
+  LOCKED
+  PENDING
+  APPROVED
+  FLAGGED
+  REJECTED
+}
+
+enum NotificationType {
+  PAYMENT_UPDATE
+  CLEARANCE_STAGE
+  CLEARANCE_FLAG
+  CERTIFICATE_ISSUED
+  GENERAL
+}
+
+// -------------------------------------------------------------
+// 1. Identity & RBAC
+// -------------------------------------------------------------
 model User {
   id              String         @id @default(uuid())
   email           String         @unique
-  password        String
+  passwordHash    String
   fullName        String
-  matricOrStaffId String         @unique
+  matricOrStaffId String         @unique // e.g., "231-115-094" or "STAFF-ACC-01"
   role            Role           @default(STUDENT)
   departmentId    String?
-  department      Department?    @relation(fields: [departmentId], references: [id])
-  
-  clearanceRequests ClearanceRequest[]
-  approvedClearances DepartmentApproval[] @relation("OfficerApprovals")
-  payments        Payment[]
-  auditLogs       AuditLog[]
-
+  department      Department?    @relation("UserDepartment", fields: [departmentId], references: [id])
+  phoneNumber     String?
+  isActive        Boolean        @default(true)
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
+
+  studentProfile  StudentProfile?
+  auditLogs       AuditLog[]
+  notifications   Notification[]
+  verifiedPayments PaymentTransaction[] @relation("VerifiedPayments")
+  stageReviews    ClearanceStageInstance[] @relation("OfficerStageReviews")
 }
 
+// -------------------------------------------------------------
+// 2. Academic Departments & Programmes
+// -------------------------------------------------------------
 model Department {
   id              String         @id @default(uuid())
-  code            String         @unique // e.g. "LIBRARY", "BURSAR", "HOSTEL", "SPORTS", "DEPT_HEAD"
-  name            String
+  code            String         @unique // "CSE", "SWE", "EEE", "BBA", "LAW", "ENG", "ACCOUNTS", "LIBRARY"
+  name            String         // e.g. "Computer Science & Engineering"
+  schoolName      String?        // e.g. "School of Science & Technology"
+  isAcademic      Boolean        @default(true) // false for Accounts, Library, etc.
   description     String?
-  requiresPayment Boolean        @default(false)
-  officers        User[]
-  approvals       DepartmentApproval[]
-  payments        Payment[]
-
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
+
+  users           User[]         @relation("UserDepartment")
+  programmes      Programme[]
+  workflowStages  WorkflowStage[]
+  courses         Course[]
 }
 
-model ClearanceRequest {
-  id              String            @id @default(uuid())
+model Programme {
+  id              String         @id @default(uuid())
+  departmentId    String
+  department      Department     @relation(fields: [departmentId], references: [id])
+  code            String         @unique // e.g. "BSC_CSE", "BSC_SWE", "BSC_DATA_SCIENCE", "BBA", "LLB"
+  title           String         // e.g. "B.Sc. in Computer Science & Engineering"
+  degreeLevel     DegreeLevel    @default(UNDERGRADUATE)
+  totalCredits    Int            @default(144)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  students        StudentProfile[]
+  feeStructures   FeeStructure[]
+  programmeFeeStructures ProgrammeFeeStructure[]
+}
+
+model AcademicTerm {
+  id              String         @id @default(uuid())
+  code            String         @unique // e.g. "SPRING_2026", "SUMMER_2026", "AUTUMN_2026"
+  title           String         // e.g. "Spring Term 2026"
+  startDate       DateTime
+  endDate         DateTime
+  isCurrent       Boolean        @default(false)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  invoices        StudentInvoice[]
+  enrolments      StudentEnrolment[]
+  semesterRegistrations SemesterRegistration[]
+  courseEnrollmentDocs  CourseEnrollmentDocument[]
+  examinationSessions   ExaminationSession[]
+}
+
+// -------------------------------------------------------------
+// 3. Student Information & Academic Profile
+// -------------------------------------------------------------
+model StudentProfile {
+  id                      String         @id @default(uuid())
+  userId                  String         @unique
+  user                    User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  studentIdNumber         String         @unique // e.g. "231-115-094"
+  programmeId             String
+  programme               Programme      @relation(fields: [programmeId], references: [id])
+  batchNumber             Int            // e.g. 56
+  intake                  String?        // e.g. "Spring 2026"
+  admissionDate           DateTime?
+  currentSemester         Int            @default(1)
+  academicStatus          String         @default("ACTIVE") // ACTIVE, SUSPENDED, GRADUATED, PROBATION, WITHDRAWN
+  cgpa                    Float          @default(0.00)
+  photoUrl                String?
+  guardianName            String?
+  guardianPhone           String?
+  address                 String?
+  
+  // Financial configuration on student
+  tuitionWaiverPercentage Float          @default(0.0) // e.g. 20.0 for 20%
+  waiverStartDate         DateTime?
+  waiverExpiryDate        DateTime?
+  scholarshipCategory     String?        // "MERIT", "CHAIRMAN", "VICE_CHANCELLOR", "NEED_BASED", "FEMALE", "FAMILY", "SPECIAL_ADMIN"
+  fineException           Boolean        @default(false)
+  specialAdjustmentBdt    Float          @default(0.0)
+
+  createdAt               DateTime       @default(now())
+  updatedAt               DateTime       @updatedAt
+
+  invoices                StudentInvoice[]
+  payments                PaymentTransaction[]
+  ledgerEntries           StudentLedgerEntry[]
+  clearances              ClearanceApplication[]
+  enrolments              StudentEnrolment[]
+  certificates            Certificate[]
+  waivers                 StudentWaiver[]
+  fineAssessments         FineAssessment[]
+  semesterRegistrations   SemesterRegistration[]
+  courseEnrollmentDocs    CourseEnrollmentDocument[]
+  admitCards              AdmitCard[]
+  courseEnrollments       StudentCourseEnrollment[]
+}
+
+model StudentEnrolment {
+  id              String         @id @default(uuid())
   studentId       String
-  student         User              @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  academicSession String            // e.g. "2025/2026"
-  clearanceType   ClearanceType     @default(GRADUATION)
-  status          ClearanceStatus   @default(PENDING)
-  rejectionReason String?
-  certificateCode String?           @unique // e.g. "CPCS-CERT-12345678"
-  issuedAt        DateTime?
+  student         StudentProfile @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  academicTermId  String
+  academicTerm    AcademicTerm   @relation(fields: [academicTermId], references: [id])
+  registeredCredits Float        @default(15.0)
+  enrolmentDate   DateTime       @default(now())
 
-  departmentApprovals DepartmentApproval[]
-  payments            Payment[]
+  @@unique([studentId, academicTermId])
+}
 
+// -------------------------------------------------------------
+// 4. Financial Management, Programme Fee Structures & Billing
+// -------------------------------------------------------------
+model ProgrammeFeeStructure {
+  id                  String      @id @default(uuid())
+  programmeId         String
+  programme           Programme   @relation(fields: [programmeId], references: [id])
+  admissionFeeBdt     Float       @default(25000.0)
+  registrationFeeBdt  Float       @default(15000.0)
+  bnccFeeBdt          Float       @default(500.0)
+  activitiesFeeBdt    Float       @default(2000.0)
+  monthlyCreditFeeBdt Float       // e.g. 8000 for CSE/SWE, 7000 for EEE/BBA, 5000 for Economics, 4000 for Masters
+  admissionFormFeeBdt Float       @default(1000.0)
+  effectiveYear       Int         @default(2026)
+  sourceUrl           String      @default("https://metrouni.edu.bd/sites/admission/programme-fee-structure")
+  verificationDate    DateTime    @default(now())
+  isActive            Boolean     @default(true)
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+
+  @@unique([programmeId, effectiveYear])
+}
+
+model FeeCategory {
+  id              String         @id @default(uuid())
+  code            String         @unique // e.g. "TUITION", "ADMISSION", "SEMESTER_REG", "ACTIVITIES", "BNCC", "EXAM_FEE", "LIBRARY_FINE", "LATE_PAYMENT_FINE"
+  name            String
+  description     String?
+  isRecurring     Boolean        @default(true)
+  isActive        Boolean        @default(true)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  feeStructures   FeeStructure[]
+  invoiceItems    InvoiceItem[]
+}
+
+model FeeStructure {
+  id              String         @id @default(uuid())
+  programmeId     String
+  programme       Programme      @relation(fields: [programmeId], references: [id])
+  feeCategoryId   String
+  feeCategory     FeeCategory    @relation(fields: [feeCategoryId], references: [id])
+  amountBdt       Float          @default(0.0)
+  ratePerCredit   Float          @default(0.0)
+  effectiveYear   Int            @default(2026)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@unique([programmeId, feeCategoryId, effectiveYear])
+}
+
+model StudentInvoice {
+  id                     String         @id @default(uuid())
+  invoiceNumber          String         @unique // e.g. "MU-INV-2026-0042"
+  studentId              String
+  student                StudentProfile @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  academicTermId         String
+  academicTerm           AcademicTerm   @relation(fields: [academicTermId], references: [id])
+  totalAmountBdt         Float          @default(0.0)
+  waiverAmountBdt        Float          @default(0.0)
+  paidAmountBdt          Float          @default(0.0)
+  outstandingBalanceBdt  Float          @default(0.0)
+  status                 InvoiceStatus  @default(UNPAID)
+  createdAt              DateTime       @default(now())
+  updatedAt              DateTime       @updatedAt
+
+  items                  InvoiceItem[]
+  installmentSchedules   InstallmentSchedule[]
+  payments               PaymentTransaction[]
+}
+
+model InvoiceItem {
+  id              String         @id @default(uuid())
+  invoiceId       String
+  invoice         StudentInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  feeCategoryId   String
+  feeCategory     FeeCategory    @relation(fields: [feeCategoryId], references: [id])
+  description     String
+  amountBdt       Float
+}
+
+model InstallmentSchedule {
+  id                String            @id @default(uuid())
+  invoiceId         String
+  invoice           StudentInvoice    @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  installmentNumber Int               // 1, 2, 3, or 4 (MU 4-installment policy)
+  dueDate           DateTime
+  amountBdt         Float
+  latePenaltyBdt    Float             @default(0.0)
+  status            InstallmentStatus @default(PENDING)
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  payments          PaymentTransaction[]
+  fineAssessments   FineAssessment[]
+}
+
+// -------------------------------------------------------------
+// 5. Tuition Waiver Management
+// -------------------------------------------------------------
+model StudentWaiver {
+  id                   String         @id @default(uuid())
+  studentId            String
+  student              StudentProfile @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  waiverType           String         @default("PERCENTAGE") // "PERCENTAGE", "FIXED_AMOUNT"
+  waiverPercentage     Float          @default(0.0) // 10%, 15%, 20%, 50%
+  fixedAmountBdt       Float          @default(0.0)
+  applicableFeeCategory String        @default("TUITION") // Strictly applies to TUITION!
+  effectiveFrom        DateTime       @default(now())
+  effectiveUntil       DateTime?
+  academicTermId       String?
+  reason               String?
+  approvalAuthority    String?        // e.g., "Vice Chancellor Approval #VC-2026-91"
+  scholarshipCategory  String?        // "MERIT", "CHAIRMAN", "VICE_CHANCELLOR", "NEED_BASED", "FEMALE", "FAMILY", "SPECIAL_ADMIN"
+  status               String         @default("ACTIVE") // "ACTIVE", "REVOKED", "EXPIRED"
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+}
+
+model WaiverHistory {
+  id                 String         @id @default(uuid())
+  studentId          String
+  previousPercentage Float
+  newPercentage      Float
+  changedByUserId    String?
+  reason             String
+  createdAt          DateTime       @default(now())
+}
+
+// -------------------------------------------------------------
+// 6. Automated Late-Payment Fine Engine
+// -------------------------------------------------------------
+model FineRule {
+  id                String         @id @default(uuid())
+  code              String         @unique // "MONTHLY_TUITION_FINE", "SEMESTER_REG_FINE"
+  feeCategory       String         // "TUITION", "SEMESTER_REG"
+  dueDay            Int            @default(12) // 12th of month
+  fineStartDay      Int            @default(13) // 13th onward
+  fineAmount        Float          @default(10.0) // 10 BDT per day for tuition; 1000 BDT fixed for semester reg
+  calculationMethod String         @default("PER_DAY") // "PER_DAY", "FIXED"
+  gracePeriodDays   Int            @default(0)
+  maxFineAmount     Float?
+  isActive          Boolean        @default(true)
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  fineAssessments   FineAssessment[]
+}
+
+model FineAssessment {
+  id                String               @id @default(uuid())
+  studentId         String
+  student           StudentProfile       @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  fineRuleId        String?
+  fineRule          FineRule?            @relation(fields: [fineRuleId], references: [id])
+  installmentId     String?
+  installment       InstallmentSchedule? @relation(fields: [installmentId], references: [id])
+  category          String               // "TUITION", "SEMESTER_REG"
+  overdueDays       Int                  @default(0)
+  assessedAmountBdt Float                @default(0.0)
+  waivedAmountBdt   Float                @default(0.0)
+  paidAmountBdt     Float                @default(0.0)
+  status            String               @default("PENDING") // "PENDING", "PAID", "WAIVED"
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+}
+
+// -------------------------------------------------------------
+// 7. Semester Registration Fee Management
+// -------------------------------------------------------------
+model SemesterRegistration {
+  id                 String         @id @default(uuid())
+  studentId          String
+  student            StudentProfile @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  academicTermId     String
+  academicTerm       AcademicTerm   @relation(fields: [academicTermId], references: [id])
+  registrationFeeBdt Float          @default(15000.0)
+  isFeePaid          Boolean        @default(false)
+  paidAt             DateTime?
+  fineAmountBdt      Float          @default(0.0) // Fixed 1000 BDT if unpaid after 25th
+  isFinePaid         Boolean        @default(false)
+  status             String         @default("PENDING_FEE") // "PENDING_FEE", "REGISTERED", "HOLD"
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+
+  @@unique([studentId, academicTermId])
+}
+
+// -------------------------------------------------------------
+// 8. Courses & Student Course Enrollment Paper
+// -------------------------------------------------------------
+model Course {
+  id              String         @id @default(uuid())
+  code            String         @unique // e.g. "CSE-311"
+  title           String         // e.g. "Compiler Design"
+  credits         Float          @default(3.0)
+  departmentId    String
+  department      Department     @relation(fields: [departmentId], references: [id])
+  semester        Int            @default(1)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  enrollments     StudentCourseEnrollment[]
+}
+
+model StudentCourseEnrollment {
+  id              String         @id @default(uuid())
+  studentId       String
+  student         StudentProfile @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  courseId        String
+  course          Course         @relation(fields: [courseId], references: [id])
+  academicTermId  String
+  status          String         @default("ENROLLED")
+  createdAt       DateTime       @default(now())
+}
+
+model CourseEnrollmentDocument {
+  id                  String         @id @default(uuid())
+  documentNumber      String         @unique // e.g. "MU-CEP-2026-0042"
+  studentId           String
+  student             StudentProfile @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  academicTermId      String
+  academicTerm        AcademicTerm   @relation(fields: [academicTermId], references: [id])
+  verificationStatus  String         @default("VERIFIED")
+  registrationFeePaid Boolean        @default(true)
+  pdfDocumentUrl      String?
+  generatedAt         DateTime       @default(now())
+}
+
+// -------------------------------------------------------------
+// 9. Examination Sessions & Admit Cards
+// -------------------------------------------------------------
+model ExaminationSession {
+  id              String         @id @default(uuid())
+  code            String         @unique // e.g. "SPRING_2026_FINAL"
+  name            String         // e.g. "Semester Final Examination — Spring 2026"
+  academicTermId  String
+  academicTerm    AcademicTerm   @relation(fields: [academicTermId], references: [id])
+  startDate       DateTime
+  endDate         DateTime
+  isPublished     Boolean        @default(true)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  admitCards      AdmitCard[]
+}
+
+model AdmitCard {
+  id                          String             @id @default(uuid())
+  admitCardNumber             String             @unique // e.g. "MU-ADM-2026-98124"
+  studentId                   String
+  student                     StudentProfile     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  examinationSessionId        String
+  examinationSession          ExaminationSession @relation(fields: [examinationSessionId], references: [id])
+  examRollNumber              String             // e.g. "231-115-094"
+  financialClearanceVerified  Boolean            @default(true)
+  isPublished                 Boolean            @default(true)
+  isRevoked                   Boolean            @default(false)
+  revocationReason            String?
+  overrideReason              String?            // If admin manually overrode eligibility
+  overrideByUserId            String?
+  qrToken                     String             @unique
+  pdfDocumentUrl              String?
+  issuedAt                    DateTime           @default(now())
+  createdAt                   DateTime           @default(now())
+  updatedAt                   DateTime           @updatedAt
+}
+
+// -------------------------------------------------------------
+// 10. Payment Transactions & Double-Entry Ledger
+// -------------------------------------------------------------
+model PaymentTransaction {
+  id                   String               @id @default(uuid())
+  transactionReference String               @unique // e.g. "MU-PAY-2026-98124"
+  studentId            String
+  student              StudentProfile       @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  invoiceId            String?
+  invoice              StudentInvoice?      @relation(fields: [invoiceId], references: [id])
+  installmentId        String?
+  installment          InstallmentSchedule? @relation(fields: [installmentId], references: [id])
+  paymentMethod        PaymentMethod        @default(NRBC_BANK_DEPOSIT)
+  amountBdt            Float
+  currency             String               @default("BDT")
+  purpose              String               // e.g. "Spring 2026 1st Installment", "Semester Registration Fee"
+  
+  // NRBC Bank Deposit Details
+  bankBranch           String?              // e.g. "Metropolitan University Campus Branch, Bateshwar"
+  slipNumber           String?              // Bank deposit receipt number
+  slipDocumentUrl      String?              // Scanned slip photo/PDF URL
+  depositDate          DateTime?
+
+  // Online Gateway / MFS Details
+  gatewayTransactionId String?              // bKash / Nagad TrxID
+  gatewayResponse      String?              // Raw JSON verification metadata
+
+  status               PaymentStatus        @default(PENDING_VERIFICATION)
+  verifiedByUserId     String?
+  verifiedBy           User?                @relation("VerifiedPayments", fields: [verifiedByUserId], references: [id])
+  verifiedAt           DateTime?
+  verificationRemarks  String?
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+}
+
+model StudentLedgerEntry {
+  id                  String          @id @default(uuid())
+  studentId           String
+  student             StudentProfile  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  entryType           LedgerEntryType
+  amountBdt           Float
+  runningBalanceBdt   Float
+  referenceEntityType String          // "INVOICE", "PAYMENT", "WAIVER", "FINE"
+  referenceEntityId   String?
+  narration           String
+  createdAt           DateTime        @default(now())
+}
+
+// -------------------------------------------------------------
+// 11. Configurable Clearance & Workflow Engine
+// -------------------------------------------------------------
+model ClearanceType {
+  id              String         @id @default(uuid())
+  code            String         @unique // "SEMESTER_FINAL", "TRANSCRIPT", "PPC", "ORIGINAL_CERT", "CONVOCATION"
+  title           String         // e.g. "Semester Final Exam Clearance"
+  description     String?
+  isFeeRequired   Boolean        @default(false)
+  defaultFeeBdt   Float          @default(0.0)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  workflowTemplates WorkflowTemplate[]
+  applications      ClearanceApplication[]
+}
+
+model WorkflowTemplate {
+  id              String            @id @default(uuid())
+  clearanceTypeId String
+  clearanceType   ClearanceType     @relation(fields: [clearanceTypeId], references: [id])
+  name            String            // e.g. "Standard Semester Final Workflow"
+  isActive        Boolean           @default(true)
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
+
+  versions        WorkflowVersion[]
 }
 
-model DepartmentApproval {
-  id                 String           @id @default(uuid())
-  clearanceRequestId String
-  clearanceRequest   ClearanceRequest @relation(fields: [clearanceRequestId], references: [id], onDelete: Cascade)
-  departmentId       String
-  department         Department       @relation(fields: [departmentId], references: [id], onDelete: Restrict)
-  officerId          String?
-  officer            User?            @relation("OfficerApprovals", fields: [officerId], references: [id])
-  status             ApprovalStatus   @default(PENDING)
-  duesAmount         Float            @default(0.0)
-  duesPaid           Boolean          @default(true)
-  remarks            String?
-  actionDate         DateTime?
+model WorkflowVersion {
+  id              String            @id @default(uuid())
+  templateId      String
+  template        WorkflowTemplate  @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  versionNumber   Int               @default(1)
+  isPublished     Boolean           @default(true)
+  createdAt       DateTime          @default(now())
 
-  createdAt          DateTime         @default(now())
-  updatedAt          DateTime         @updatedAt
+  stages          WorkflowStage[]
+  applications    ClearanceApplication[]
 
-  @@unique([clearanceRequestId, departmentId])
+  @@unique([templateId, versionNumber])
 }
 
-model Payment {
-  id                 String            @id @default(uuid())
+model WorkflowStage {
+  id                String            @id @default(uuid())
+  workflowVersionId String
+  workflowVersion   WorkflowVersion   @relation(fields: [workflowVersionId], references: [id], onDelete: Cascade)
+  sequenceOrder     Int               // 1, 2, 3...
+  departmentCode    String            // "ACCOUNTS", "LIBRARY", "LABS", "HALL", "DEPT_HEAD", "EXAM_RECORDS"
+  department        Department?       @relation(fields: [departmentCode], references: [code])
+  stageName         String            // e.g. "Accounts Dues Verification"
+  isConditional     Boolean           @default(false)
+  conditionRules    String?           // JSON expression for dynamic rules
+  createdAt         DateTime          @default(now())
+
+  stageInstances    ClearanceStageInstance[]
+}
+
+model ClearanceApplication {
+  id                  String            @id @default(uuid())
+  applicationNumber   String            @unique // e.g. "MU-CLR-2026-0081"
+  studentId           String
+  student             StudentProfile    @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  clearanceTypeId     String
+  clearanceType       ClearanceType     @relation(fields: [clearanceTypeId], references: [id])
+  workflowVersionId   String
+  workflowVersion     WorkflowVersion   @relation(fields: [workflowVersionId], references: [id])
+  academicSession     String            // e.g. "Spring 2026"
+  status              ClearanceStatus   @default(SUBMITTED)
+  rejectionReason     String?
+  certificateIssued   Boolean           @default(false)
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  stageInstances      ClearanceStageInstance[]
+  certificate         Certificate?
+}
+
+model ClearanceStageInstance {
+  id                 String               @id @default(uuid())
+  applicationId      String
+  application        ClearanceApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  workflowStageId    String
+  workflowStage      WorkflowStage        @relation(fields: [workflowStageId], references: [id])
+  status             StageStatus          @default(PENDING)
+  assignedOfficerId  String?
+  assignedOfficer    User?                @relation("OfficerStageReviews", fields: [assignedOfficerId], references: [id])
+  decidedAt          DateTime?
+  officerRemarks     String?
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+
+  issues             ClearanceIssue[]
+
+  @@unique([applicationId, workflowStageId])
+}
+
+model ClearanceIssue {
+  id                 String                 @id @default(uuid())
+  stageInstanceId    String
+  stageInstance      ClearanceStageInstance @relation(fields: [stageInstanceId], references: [id], onDelete: Cascade)
+  flagReason         String                 // e.g. "Unreturned textbook: Algorithm Design (Acc # 4821)"
+  duesAmountBdt      Float                  @default(0.0)
+  isResolved         Boolean                @default(false)
+  resolvedAt         DateTime?
+  officerRemarks     String?
+  studentResponse    String?
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+}
+
+// -------------------------------------------------------------
+// 12. Certificates & Cryptographic Verification
+// -------------------------------------------------------------
+model Certificate {
+  id                 String                      @id @default(uuid())
+  certificateNumber  String                      @unique // e.g. "MU-CERT-PPC-2026-7819"
+  applicationId      String                      @unique
+  application        ClearanceApplication        @relation(fields: [applicationId], references: [id])
   studentId          String
-  student            User              @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  departmentId       String?
-  department         Department?       @relation(fields: [departmentId], references: [id])
-  clearanceRequestId String?
-  clearanceRequest   ClearanceRequest? @relation(fields: [clearanceRequestId], references: [id])
-  amount             Float
-  reference          String            @unique
-  purpose            String
-  status             PaymentStatus     @default(SUCCESS)
-  paymentMethod      String            @default("CARD")
-  paidAt             DateTime          @default(now())
-  createdAt          DateTime          @default(now())
+  student            StudentProfile              @relation(fields: [studentId], references: [id])
+  issueDate          DateTime                    @default(now())
+  certificateType    String                      // "SEMESTER_FINAL_CLEARANCE", "GRADUATION_CLEARANCE", "PPC"
+  pdfDocumentUrl     String?
+  isRevoked          Boolean                     @default(false)
+  revocationReason   String?
+  revokedAt          DateTime?
+  createdAt          DateTime                    @default(now())
+
+  verificationToken  CertificateVerificationToken?
 }
 
+model CertificateVerificationToken {
+  id                 String         @id @default(uuid())
+  certificateId      String         @unique
+  certificate        Certificate    @relation(fields: [certificateId], references: [id], onDelete: Cascade)
+  cryptographicToken String         @unique // SHA-256 server-signed token
+  publicLookupCode   String         @unique // e.g. "MU-VTOK-881923"
+  createdAt          DateTime       @default(now())
+}
+
+// -------------------------------------------------------------
+// 13. System Audit & Notifications
+// -------------------------------------------------------------
 model AuditLog {
-  id         String   @id @default(uuid())
-  userId     String?
-  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
-  action     String   // e.g. "CLEARANCE_INITIATED", "DEPT_APPROVED", "PAYMENT_VERIFIED", "CERTIFICATE_ISSUED"
-  entityType String   // e.g. "CLEARANCE_REQUEST", "PAYMENT", "APPROVAL"
-  entityId   String?
-  details    String?  // JSON formatted or descriptive details
-  ipAddress  String?
-  createdAt  DateTime @default(now())
+  id                 String         @id @default(uuid())
+  userId             String?
+  user               User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
+  actionTag          String         // e.g. "PAYMENT_SUBMITTED", "SLIP_VERIFIED", "STAGE_APPROVED", "CERT_ISSUED", "WAIVER_UPDATED", "ADMIT_CARD_GENERATED"
+  entityType         String         // "PAYMENT", "INVOICE", "CLEARANCE", "CERTIFICATE", "WAIVER", "ADMIT_CARD"
+  entityId           String?
+  details            String?        // JSON formatted metadata diff
+  ipAddress          String?
+  userAgent          String?
+  createdAt          DateTime       @default(now())
 }
 
+model Notification {
+  id                 String           @id @default(uuid())
+  userId             String
+  user               User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title              String
+  message            String
+  type               NotificationType @default(GENERAL)
+  isRead             Boolean          @default(false)
+  linkUrl            String?
+  createdAt          DateTime         @default(now())
+}

@@ -7,4 +7,5 @@ build/
 *.log
 coverage/
 .prisma
-
+backend/src/generated/
+*.tmp*
