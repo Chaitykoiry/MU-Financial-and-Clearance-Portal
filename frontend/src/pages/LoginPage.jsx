@@ -65,20 +65,20 @@ export default function LoginPage() {
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
             <button
               type="button"
-              onClick={() => setDemoUser('choyon@metrouni.edu.bd', 'student123')}
+              onClick={() => setDemoUser('231-115-094', '')}
               className="p-2 bg-white hover:bg-blue-50 border border-slate-200 hover:border-blue-300 rounded-xl text-left font-medium text-slate-800 transition"
             >
               🎓 <span className="font-bold">Choyon Dhor</span>
-              <div className="text-[10px] text-emerald-600 font-mono mt-0.5">Cleared (231-115-094)</div>
+              <div className="text-[10px] text-emerald-600 font-mono mt-0.5">ID: 231-115-094 (No PW)</div>
             </button>
 
             <button
               type="button"
-              onClick={() => setDemoUser('clara@metrouni.edu.bd', 'student123')}
+              onClick={() => setDemoUser('231-115-042', '')}
               className="p-2 bg-white hover:bg-blue-50 border border-slate-200 hover:border-blue-300 rounded-xl text-left font-medium text-slate-800 transition"
             >
               🎓 <span className="font-bold">Clara Oswald</span>
-              <div className="text-[10px] text-amber-600 font-mono mt-0.5">Pending (231-115-042)</div>
+              <div className="text-[10px] text-amber-600 font-mono mt-0.5">ID: 231-115-042 (No PW)</div>
             </button>
 
             <button
@@ -147,16 +147,15 @@ export default function LoginPage() {
 
           <div>
             <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-              Portal Password
+              Portal Password <span className="text-[10px] font-normal text-emerald-600">(Staff/Admin only — Not required for Students)</span>
             </label>
             <div className="relative">
               <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
                 type="password"
-                required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
+                placeholder="Leave blank if logging in with Student ID"
                 className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0f2b5c] transition"
               />
             </div>

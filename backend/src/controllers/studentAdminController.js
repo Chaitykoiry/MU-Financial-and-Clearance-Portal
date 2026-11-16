@@ -463,12 +463,243 @@ const resetStudentPassword = async (req, res) => {
   }
 };
 
+const bulkImportStudents = async (req, res) => {
+  try {
+    const { csvContent } = req.body;
+
+    if (!csvContent || typeof csvContent !== 'string') {
+      return res.status(400).json({ success: false, message: 'Valid CSV content is required for bulk onboarding.' });
+    }
+
+    const lines = csvContent
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+
+    if (lines.length < 2) {
+      return res.status(400).json({
+        success: false,
+        message: 'CSV file must include a header row and at least one student row.'
+      });
+    }
+
+    const headers = lines[0].split(',').map((h) => h.trim().toLowerCase());
+    const idIdx = headers.findIndex((h) => h.includes('studentid') || h === 'id' || h.includes('matric'));
+    const nameIdx = headers.findIndex((h) => h.includes('name'));
+    const emailIdx = headers.findIndex((h) => h.includes('email'));
+    const phoneIdx = headers.findIndex((h) => h.includes('phone'));
+    const progIdx = headers.findIndex((h) => h.includes('prog'));
+    const batchIdx = headers.findIndex((h) => h.includes('batch'));
+    const semIdx = headers.findIndex((h) => h.includes('sem'));
+    const waiverIdx = headers.findIndex((h) => h.includes('waiver'));
+    const catIdx = headers.findIndex((h) => h.includes('scholar') || h.includes('category'));
+
+    const allProgrammes = await prisma.programme.findMany({
+      include: {
+        department: true,
+        programmeFeeStructures: { where: { isActive: true }, take: 1 }
+      }
+    });
+    const defaultProg = allProgrammes.find((p) => p.code === 'BSC_CSE') || allProgrammes[0];
+    const currentTerm = await prisma.academicTerm.findFirst({ where: { isCurrent: true } });
+    const defaultHash = await bcrypt.hash('student-direct-id-login', 8);
+
+    const importedStudents = [];
+    const skippedRows = [];
+
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split(',').map((c) => c.trim().replace(/^"|"$/g, ''));
+      const studentIdNumber = idIdx >= 0 ? cols[idIdx] : cols[0];
+      const fullName = nameIdx >= 0 ? cols[nameIdx] : cols[1];
+      const email =
+        (emailIdx >= 0 ? cols[emailIdx] : cols[2]) ||
+        `${String(studentIdNumber).replace(/[^a-zA-Z0-9]/g, '')}@metrouni.edu.bd`;
+      const phoneNumber = phoneIdx >= 0 ? cols[phoneIdx] : cols[3] || '';
+      const programmeCode = (progIdx >= 0 ? cols[progIdx] : cols[4]) || 'BSC_CSE';
+      const batchNumber = parseInt(batchIdx >= 0 ? cols[batchIdx] : cols[5] || '58', 10) || 58;
+      const currentSemester = parseInt(semIdx >= 0 ? cols[semIdx] : cols[6] || '1', 10) || 1;
+      const waiverPct = Math.max(
+        0,
+        Math.min(100, parseFloat(waiverIdx >= 0 ? cols[waiverIdx] : cols[7] || '0') || 0)
+      );
+      const scholarshipCategory = (catIdx >= 0 ? cols[catIdx] : cols[8]) || (waiverPct > 0 ? 'MERIT' : 'NONE');
+
+      if (!studentIdNumber || !fullName) {
+        skippedRows.push({ rowNumber: i, studentIdNumber: studentIdNumber || 'N/A', reason: 'Missing Student ID or Full Name' });
+        continue;
+      }
+
+      const existing = await prisma.user.findFirst({
+        where: {
+          OR: [{ matricOrStaffId: studentIdNumber }, { email }]
+        }
+      });
+
+      if (existing) {
+        skippedRows.push({
+          rowNumber: i,
+          studentIdNumber,
+          fullName,
+          reason: 'Student ID or email already exists'
+        });
+        continue;
+      }
+
+      const programme = allProgrammes.find((p) => p.code.toUpperCase() === programmeCode.toUpperCase()) || defaultProg;
+      const feeStructure = programme?.programmeFeeStructures?.[0];
+      const baseMonthlyCreditFee = feeStructure ? feeStructure.monthlyCreditFeeBdt : 8000.0;
+      const registrationFee = feeStructure ? feeStructure.registrationFeeBdt : 15000.0;
+
+      const totalTermTuition = baseMonthlyCreditFee * 4;
+      const waiverBreakdown = TuitionWaiverService.calculateTuitionBreakdown(totalTermTuition, waiverPct);
+      const netPayableTerm = waiverBreakdown.payableTuition;
+
+      const created = await prisma.$transaction(async (tx) => {
+        const user = await tx.user.create({
+          data: {
+            email,
+            passwordHash: defaultHash,
+            fullName,
+            matricOrStaffId: studentIdNumber,
+            role: 'STUDENT',
+            departmentId: programme.departmentId,
+            phoneNumber,
+            isActive: true
+          }
+        });
+
+        const profile = await tx.studentProfile.create({
+          data: {
+            userId: user.id,
+            studentIdNumber,
+            programmeId: programme.id,
+            batchNumber,
+            intake: `Batch ${batchNumber}`,
+            admissionDate: new Date(),
+            currentSemester,
+            cgpa: 0.0,
+            tuitionWaiverPercentage: waiverPct,
+            scholarshipCategory: waiverPct > 0 ? scholarshipCategory : null,
+            fineException: false,
+            specialAdjustmentBdt: 0.0
+          }
+        });
+
+        if (waiverPct > 0) {
+          await tx.studentWaiver.create({
+            data: {
+              studentId: profile.id,
+              waiverType: 'PERCENTAGE',
+              waiverPercentage: waiverPct,
+              applicableFeeCategory: 'TUITION',
+              scholarshipCategory,
+              reason: `Bulk Intake Onboarding (${waiverPct}% Waiver)`,
+              approvalAuthority: 'Registrar & Admissions Office',
+              status: 'ACTIVE'
+            }
+          });
+        }
+
+        if (currentTerm) {
+          await tx.semesterRegistration.create({
+            data: {
+              studentId: profile.id,
+              academicTermId: currentTerm.id,
+              registrationFeeBdt: registrationFee,
+              isFeePaid: false,
+              status: 'PENDING_FEE'
+            }
+          });
+
+          const invNumber = `MU-INV-${new Date().getFullYear()}-${Math.floor(10000 + Math.random() * 89999)}`;
+          const invoice = await tx.studentInvoice.create({
+            data: {
+              invoiceNumber: invNumber,
+              studentId: profile.id,
+              academicTermId: currentTerm.id,
+              totalAmountBdt: totalTermTuition,
+              waiverAmountBdt: waiverBreakdown.discountAmount,
+              paidAmountBdt: 0.0,
+              outstandingBalanceBdt: netPayableTerm,
+              status: 'UNPAID'
+            }
+          });
+
+          const installmentAmount = Math.round((netPayableTerm / 4) * 100) / 100;
+          const termStart = new Date(currentTerm.startDate);
+          for (let inst = 1; inst <= 4; inst++) {
+            const dueDate = new Date(termStart.getFullYear(), termStart.getMonth() + (inst - 1), 12);
+            await tx.installmentSchedule.create({
+              data: {
+                invoiceId: invoice.id,
+                installmentNumber: inst,
+                dueDate,
+                amountBdt: installmentAmount,
+                status: 'PENDING'
+              }
+            });
+          }
+
+          await tx.studentLedgerEntry.create({
+            data: {
+              studentId: profile.id,
+              entryType: 'DEBIT_INVOICE',
+              amountBdt: netPayableTerm,
+              runningBalanceBdt: netPayableTerm,
+              referenceEntityType: 'INVOICE',
+              referenceEntityId: invoice.id,
+              narration: `Spring Term 2026 Tuition Billing (Bulk Onboarding)`
+            }
+          });
+        }
+
+        return profile;
+      });
+
+      importedStudents.push({
+        id: created.id,
+        studentIdNumber,
+        fullName,
+        email,
+        programmeCode: programme.code,
+        batchNumber,
+        waiverPercentage: waiverPct
+      });
+    }
+
+    await recordAuditLog({
+      userId: req.user.id,
+      action: 'STUDENTS_BULK_CSV_IMPORTED',
+      entityType: 'STUDENT_BATCH',
+      entityId: `BULK-${Date.now()}`,
+      details: {
+        importedCount: importedStudents.length,
+        skippedCount: skippedRows.length
+      },
+      req
+    });
+
+    res.status(201).json({
+      success: true,
+      message: `Bulk CSV Onboarding completed: ${importedStudents.length} student(s) imported, ${skippedRows.length} skipped.`,
+      importedCount: importedStudents.length,
+      skippedCount: skippedRows.length,
+      importedStudents,
+      skippedRows
+    });
+  } catch (error) {
+    console.error('Error in bulk student CSV import:', error);
+    res.status(500).json({ success: false, message: 'Failed to process bulk CSV student import.' });
+  }
+};
+
 module.exports = {
   listStudents,
   getStudentById,
   createStudent,
   updateStudent,
   assignTuitionWaiver,
-  resetStudentPassword
+  resetStudentPassword,
+  bulkImportStudents
 };
 

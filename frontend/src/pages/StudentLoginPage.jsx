@@ -2,39 +2,48 @@ import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { authApi } from '../services/api';
-import { GraduationCap, Lock, User, AlertCircle, Sparkles, ArrowRight, ShieldCheck } from 'lucide-react';
+import { GraduationCap, User, AlertCircle, Sparkles, ArrowRight, CheckCircle2 } from 'lucide-react';
 import campusImg from '../assets/mu-campus-1.jpg';
 import logoImg from '../assets/mu-logo-white.png';
 
 export default function StudentLoginPage() {
   const [studentId, setStudentId] = useState('');
-  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const { login } = useAuth();
   const navigate = useNavigate();
 
-  const handleLogin = async (e) => {
-    if (e) e.preventDefault();
+  const loginWithId = async (targetId) => {
+    const idToUse = (targetId || studentId || '').trim();
+    if (!idToUse) {
+      setError('Please enter your Metropolitan University Student ID Number.');
+      return;
+    }
+
     setError('');
     setLoading(true);
 
     try {
-      const res = await authApi.studentLogin({ studentId, password });
+      const res = await authApi.studentLogin({ studentId: idToUse });
       if (res.data.success) {
         login(res.data.token, res.data.user);
         navigate('/student');
       }
     } catch (err) {
-      setError(err.response?.data?.message || 'Login failed. Please verify your Student ID and password.');
+      setError(err.response?.data?.message || 'Student ID not found. Please verify your Student ID number.');
     } finally {
       setLoading(false);
     }
   };
 
-  const setDemoUser = (id, pw) => {
+  const handleLogin = async (e) => {
+    if (e) e.preventDefault();
+    await loginWithId(studentId);
+  };
+
+  const handleQuickDemoLogin = (id) => {
     setStudentId(id);
-    setPassword(pw);
+    loginWithId(id);
   };
 
   return (
@@ -57,8 +66,9 @@ export default function StudentLoginPage() {
           </div>
           <h1 className="text-xl font-extrabold tracking-tight">METROPOLITAN UNIVERSITY</h1>
           <p className="text-blue-200 text-xs mt-0.5">Student Academic & Financial Portal</p>
-          <div className="inline-block mt-2 text-[10px] font-semibold bg-blue-500/20 text-amber-300 border border-amber-400/30 px-3 py-0.5 rounded-full uppercase tracking-wider">
-            Bateshwar, Sylhet-3103, Bangladesh
+          <div className="inline-flex items-center gap-1.5 mt-2 text-[10px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 px-3 py-0.5 rounded-full uppercase tracking-wider">
+            <CheckCircle2 className="w-3 h-3" />
+            Direct Student ID Access • No Password Required
           </div>
         </div>
 
@@ -66,13 +76,13 @@ export default function StudentLoginPage() {
         <div className="p-4 bg-slate-950/60 border-b border-white/10">
           <div className="flex items-center gap-1.5 text-[11px] font-bold text-amber-400 uppercase tracking-wider mb-2">
             <Sparkles className="w-3.5 h-3.5" />
-            1-Click Student Demo Accounts
+            1-Click Instant Student Login (Demo Roster)
           </div>
 
           <div className="grid grid-cols-2 gap-2 text-xs">
             <button
               type="button"
-              onClick={() => setDemoUser('231-115-094', 'student123')}
+              onClick={() => handleQuickDemoLogin('231-115-094')}
               className="p-2.5 bg-slate-900/80 hover:bg-blue-900/40 border border-slate-700 hover:border-blue-400 rounded-xl text-left transition"
             >
               <div className="font-bold text-white">Choyon Dhor</div>
@@ -82,7 +92,7 @@ export default function StudentLoginPage() {
 
             <button
               type="button"
-              onClick={() => setDemoUser('231-115-042', 'student123')}
+              onClick={() => handleQuickDemoLogin('231-115-042')}
               className="p-2.5 bg-slate-900/80 hover:bg-blue-900/40 border border-slate-700 hover:border-blue-400 rounded-xl text-left transition"
             >
               <div className="font-bold text-white">Clara Oswald</div>
@@ -92,7 +102,7 @@ export default function StudentLoginPage() {
           </div>
         </div>
 
-        {/* Login Form */}
+        {/* Login Form (Student ID Only) */}
         <form onSubmit={handleLogin} className="p-6 space-y-4">
           {error && (
             <div className="p-3 bg-rose-950/80 border border-rose-500/50 text-rose-200 rounded-xl text-xs flex items-start gap-2">
@@ -103,37 +113,22 @@ export default function StudentLoginPage() {
 
           <div>
             <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
-              Metropolitan University Student ID Number
+              Enter Your Student ID Number
             </label>
             <div className="relative">
-              <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+              <User className="w-4 h-4 text-amber-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
                 required
                 placeholder="e.g. 231-115-094"
                 value={studentId}
                 onChange={(e) => setStudentId(e.target.value)}
-                className="w-full pl-10 pr-4 py-2.5 bg-slate-950/80 border border-slate-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl text-xs font-mono text-white placeholder-slate-500 outline-none"
+                className="w-full pl-10 pr-4 py-3 bg-slate-950/80 border border-slate-700 focus:border-amber-400 focus:ring-1 focus:ring-amber-400 rounded-xl text-sm font-mono font-bold text-white placeholder-slate-500 outline-none"
               />
             </div>
-            <p className="text-[10px] text-slate-400 mt-1">Format: Batch-Intake-Roll (e.g. 231-115-094)</p>
-          </div>
-
-          <div>
-            <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
-              Portal Password / PIN
-            </label>
-            <div className="relative">
-              <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-              <input
-                type="password"
-                required
-                placeholder="••••••••"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full pl-10 pr-4 py-2.5 bg-slate-950/80 border border-slate-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl text-xs text-white placeholder-slate-500 outline-none"
-              />
-            </div>
+            <p className="text-[11px] text-slate-400 mt-1.5">
+              Simply enter your official Student ID (Batch-Intake-Roll, e.g. <span className="font-mono text-amber-300">231-115-094</span>) to access your portal immediately.
+            </p>
           </div>
 
           <button
@@ -142,10 +137,10 @@ export default function StudentLoginPage() {
             className="w-full py-3 bg-gradient-to-r from-blue-600 to-[#0f2b5c] hover:from-blue-500 hover:to-blue-700 text-white font-bold rounded-xl shadow-lg transition text-xs flex items-center justify-center gap-2 disabled:opacity-50"
           >
             {loading ? (
-              'Authenticating Student ID...'
+              'Opening Student Portal...'
             ) : (
               <>
-                Sign In to Student Portal
+                Enter Student Portal with Student ID
                 <ArrowRight className="w-4 h-4 text-amber-400" />
               </>
             )}
@@ -168,4 +163,3 @@ export default function StudentLoginPage() {
     </div>
   );
 }
-

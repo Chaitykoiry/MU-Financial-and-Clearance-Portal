@@ -71,25 +71,26 @@ const register = async (req, res) => {
 };
 
 /**
- * Dedicated Student Portal Login
- * Uses Student ID (e.g. 231-115-094) as username.
+ * Dedicated Student Portal Login (Passwordless — Student ID Only)
+ * Students authenticate directly using their Student ID (e.g. 231-115-094).
  * Enforces role === 'STUDENT'
  */
 const studentLogin = async (req, res) => {
   try {
-    const { studentId, password } = req.body;
+    const { studentId } = req.body;
 
-    if (!studentId || !password) {
-      return res.status(400).json({ success: false, message: 'Student ID and password/PIN are required.' });
+    if (!studentId || !String(studentId).trim()) {
+      return res.status(400).json({ success: false, message: 'Student ID is required.' });
     }
 
-    const trimmedId = studentId.trim();
+    const trimmedId = String(studentId).trim();
 
     const user = await prisma.user.findFirst({
       where: {
         OR: [
-          { matricOrStaffId: trimmedId },
-          { email: trimmedId }
+          { matricOrStaffId: { equals: trimmedId, mode: 'insensitive' } },
+          { email: { equals: trimmedId, mode: 'insensitive' } },
+          { studentProfile: { studentIdNumber: { equals: trimmedId, mode: 'insensitive' } } }
         ]
       },
       include: {
@@ -100,7 +101,7 @@ const studentLogin = async (req, res) => {
     });
 
     if (!user) {
-      return res.status(401).json({ success: false, message: 'Invalid Student ID or password.' });
+      return res.status(401).json({ success: false, message: 'Student ID not found in Metropolitan University records.' });
     }
 
     if (user.role !== 'STUDENT') {
@@ -108,11 +109,6 @@ const studentLogin = async (req, res) => {
         success: false,
         message: 'This portal is reserved for students. Administrative officers must login via the Administration Portal.'
       });
-    }
-
-    const isMatch = await bcrypt.compare(password, user.passwordHash);
-    if (!isMatch) {
-      return res.status(401).json({ success: false, message: 'Invalid Student ID or password.' });
     }
 
     const token = jwt.sign(
@@ -126,7 +122,7 @@ const studentLogin = async (req, res) => {
       action: 'STUDENT_PORTAL_LOGIN',
       entityType: 'USER',
       entityId: user.id,
-      details: { studentId: trimmedId },
+      details: { studentId: trimmedId, authMode: 'STUDENT_ID_DIRECT' },
       req
     });
 
@@ -218,27 +214,36 @@ const login = async (req, res) => {
   try {
     const { identifier, password } = req.body;
 
-    if (!identifier || !password) {
-      return res.status(400).json({ success: false, message: 'Identifier and password are required.' });
+    if (!identifier || !String(identifier).trim()) {
+      return res.status(400).json({ success: false, message: 'Student ID or staff email is required.' });
     }
+
+    const trimmedIdentifier = String(identifier).trim();
 
     const user = await prisma.user.findFirst({
       where: {
         OR: [
-          { email: identifier },
-          { matricOrStaffId: identifier }
+          { email: { equals: trimmedIdentifier, mode: 'insensitive' } },
+          { matricOrStaffId: { equals: trimmedIdentifier, mode: 'insensitive' } },
+          { studentProfile: { studentIdNumber: { equals: trimmedIdentifier, mode: 'insensitive' } } }
         ]
       },
-      include: { department: true, studentProfile: true }
+      include: { department: true, studentProfile: { include: { programme: true } } }
     });
 
     if (!user) {
-      return res.status(401).json({ success: false, message: 'Invalid credentials.' });
+      return res.status(401).json({ success: false, message: 'Invalid credentials or Student ID not found.' });
     }
 
-    const isMatch = await bcrypt.compare(password, user.passwordHash);
-    if (!isMatch) {
-      return res.status(401).json({ success: false, message: 'Invalid credentials.' });
+    // Password is ONLY required for Administrative / Officer roles; Students login directly with Student ID
+    if (user.role !== 'STUDENT') {
+      if (!password) {
+        return res.status(400).json({ success: false, message: 'Password is required for administrative accounts.' });
+      }
+      const isMatch = await bcrypt.compare(password, user.passwordHash);
+      if (!isMatch) {
+        return res.status(401).json({ success: false, message: 'Invalid credentials.' });
+      }
     }
 
     const token = jwt.sign(

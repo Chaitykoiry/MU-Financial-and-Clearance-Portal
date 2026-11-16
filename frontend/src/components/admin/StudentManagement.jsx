@@ -1,11 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { studentAdminApi, feeStructureApi, departmentApi } from '../../services/api';
+import { studentAdminApi, feeStructureApi, departmentApi, accountsApi } from '../../services/api';
 import {
   Users,
   UserPlus,
   Search,
   Percent,
-  KeyRound,
   ShieldAlert,
   CheckCircle2,
   X,
@@ -13,8 +12,18 @@ import {
   Building,
   DollarSign,
   GraduationCap,
-  Sparkles
+  Sparkles,
+  Upload,
+  FileSpreadsheet,
+  Download,
+  FileText
 } from 'lucide-react';
+
+const SAMPLE_BATCH_CSV = `studentIdNumber,fullName,email,programmeCode,batchNumber,currentSemester,tuitionWaiverPercentage,scholarshipCategory
+231-115-101,Tahmid Hasan,tahmid101@metrouni.edu.bd,BSC_CSE,56,7,20,MERIT
+231-115-102,Nusrat Jahan,nusrat102@metrouni.edu.bd,BSC_CSE,56,7,15,FEMALE_WAIVER
+231-115-103,Tanvir Ahmed,tanvir103@metrouni.edu.bd,BBA,56,5,0,NONE
+231-115-104,Sadia Rahman,sadia104@metrouni.edu.bd,BSC_SWE,56,6,25,MERIT`;
 
 export default function StudentManagement() {
   const [students, setStudents] = useState([]);
@@ -35,7 +44,6 @@ export default function StudentManagement() {
     fullName: '',
     email: '',
     phoneNumber: '',
-    password: 'student123',
     departmentId: '',
     programmeCode: 'BSC_CSE',
     degreeType: 'UNDERGRADUATE',
@@ -54,6 +62,12 @@ export default function StudentManagement() {
     specialAdjustmentBdt: 0
   });
 
+  // Bulk CSV Import Modal
+  const [csvModal, setCsvModal] = useState(false);
+  const [csvContent, setCsvContent] = useState(SAMPLE_BATCH_CSV);
+  const [importingCsv, setImportingCsv] = useState(false);
+  const [csvResult, setCsvResult] = useState(null);
+
   // Waiver Edit Modal
   const [waiverModal, setWaiverModal] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState(null);
@@ -64,10 +78,6 @@ export default function StudentManagement() {
     startDate: '2026-01-01',
     expiryDate: '2026-12-31'
   });
-
-  // Password Reset Modal
-  const [pwdModal, setPwdModal] = useState(false);
-  const [newPassword, setNewPassword] = useState('student123');
 
   useEffect(() => {
     fetchInitialData();
@@ -92,7 +102,6 @@ export default function StudentManagement() {
       }
       if (fRes.data.success) {
         setFeeStructures(fRes.data.feeStructures);
-        // Pre-load default BSC_CSE
         const defStructure = fRes.data.feeStructures.find((f) => f.programmeCode === 'BSC_CSE');
         if (defStructure) setPreviewFee(defStructure);
       }
@@ -124,12 +133,61 @@ export default function StudentManagement() {
       if (res.data.success) {
         setCreateModal(false);
         fetchInitialData();
-        alert(`Student ${res.data.student.studentIdNumber} registered successfully!`);
+        alert(
+          `Student ${res.data.student.studentIdNumber} registered! They can now log in directly using their Student ID without a password.`
+        );
       }
     } catch (err) {
       setFormError(err.response?.data?.message || 'Failed to create student.');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleCsvFileUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      setCsvContent(String(reader.result || ''));
+      setCsvResult(null);
+    };
+    reader.readAsText(file);
+  };
+
+  const handleBulkCsvSubmit = async (e) => {
+    e.preventDefault();
+    if (!csvContent.trim()) return;
+    try {
+      setImportingCsv(true);
+      const res = await studentAdminApi.bulkImport({ csvContent });
+      if (res.data.success) {
+        setCsvResult(res.data);
+        fetchInitialData();
+      }
+    } catch (err) {
+      alert(err.response?.data?.message || 'Bulk CSV import failed.');
+    } finally {
+      setImportingCsv(false);
+    }
+  };
+
+  const downloadReportWithAuth = async (url, filename) => {
+    try {
+      const token = localStorage.getItem('cpcs_token');
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!res.ok) throw new Error('Failed to export report');
+      const blob = await res.blob();
+      const link = document.createElement('a');
+      link.href = window.URL.createObjectURL(blob);
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } catch (err) {
+      alert(err.message || 'Export failed.');
     }
   };
 
@@ -160,26 +218,6 @@ export default function StudentManagement() {
     }
   };
 
-  const openPwdModal = (student) => {
-    setSelectedStudent(student);
-    setNewPassword('student123');
-    setPwdModal(true);
-  };
-
-  const handleResetPassword = async (e) => {
-    e.preventDefault();
-    if (!selectedStudent) return;
-    try {
-      const res = await studentAdminApi.resetPassword(selectedStudent.id, { newPassword });
-      if (res.data.success) {
-        setPwdModal(false);
-        alert(`Password for ${selectedStudent.studentIdNumber} successfully reset.`);
-      }
-    } catch (err) {
-      alert(err.response?.data?.message || 'Failed to reset password.');
-    }
-  };
-
   // Filter students
   const filteredStudents = students.filter((s) => {
     const q = search.toLowerCase();
@@ -205,24 +243,61 @@ export default function StudentManagement() {
   return (
     <div className="space-y-6">
       {/* Header and Actions */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-5 rounded-3xl border border-slate-200 shadow-xs">
+      <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 bg-white p-5 rounded-3xl border border-slate-200 shadow-xs">
         <div>
           <h2 className="text-lg font-black text-slate-900 flex items-center gap-2">
             <Users className="w-5 h-5 text-blue-600" />
-            Student Management & Financial Accounts
+            Student Management, Batch Onboarding & Financial Reports
           </h2>
           <p className="text-xs text-slate-500 mt-0.5">
-            Manual Registration, Programme Fee Assignment, Tuition Waiver Discounter & Credential Controls
+            Passwordless Student ID Access • Bulk CSV Intake Onboarding • Programme Fee & Waiver Controls • Batch PDF/CSV Exports
           </p>
         </div>
 
-        <button
-          onClick={() => setCreateModal(true)}
-          className="flex items-center gap-2 px-4 py-2.5 bg-[#0f2b5c] hover:bg-[#1a3d7c] text-white font-bold rounded-2xl text-xs transition shadow-md"
-        >
-          <UserPlus className="w-4 h-4 text-amber-400" />
-          Register New Student
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => downloadReportWithAuth(accountsApi.exportDefaultersPdfUrl, 'MU_Defaulters_Report.pdf')}
+            className="flex items-center gap-1.5 px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold rounded-xl text-xs transition"
+          >
+            <FileText className="w-3.5 h-3.5" />
+            Defaulters PDF
+          </button>
+
+          <button
+            onClick={() => downloadReportWithAuth(accountsApi.exportDefaultersCsvUrl, 'MU_Defaulters_Report.csv')}
+            className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition"
+          >
+            <Download className="w-3.5 h-3.5" />
+            Defaulters CSV
+          </button>
+
+          <button
+            onClick={() => downloadReportWithAuth(accountsApi.exportCollectionsPdfUrl, 'MU_Collections_Report.pdf')}
+            className="flex items-center gap-1.5 px-3 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 font-bold rounded-xl text-xs transition"
+          >
+            <FileText className="w-3.5 h-3.5" />
+            Collection Report PDF
+          </button>
+
+          <button
+            onClick={() => {
+              setCsvResult(null);
+              setCsvModal(true);
+            }}
+            className="flex items-center gap-1.5 px-3.5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-2xl text-xs transition shadow-sm"
+          >
+            <FileSpreadsheet className="w-4 h-4 text-amber-300" />
+            Bulk CSV Import
+          </button>
+
+          <button
+            onClick={() => setCreateModal(true)}
+            className="flex items-center gap-2 px-4 py-2.5 bg-[#0f2b5c] hover:bg-[#1a3d7c] text-white font-bold rounded-2xl text-xs transition shadow-md"
+          >
+            <UserPlus className="w-4 h-4 text-amber-400" />
+            Register Student
+          </button>
+        </div>
       </div>
 
       {/* Filter and Search Bar */}
@@ -231,7 +306,7 @@ export default function StudentManagement() {
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
           <input
             type="text"
-            placeholder="Search by ID, Name or Email..."
+            placeholder="Search by Student ID, Name or Email..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-blue-500 text-slate-800"
@@ -245,7 +320,7 @@ export default function StudentManagement() {
             onChange={(e) => setFilterWaiver(e.target.value)}
             className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-medium text-slate-700"
           >
-            <option value="ALL">All Students</option>
+            <option value="ALL">All Students ({students.length})</option>
             <option value="WITH_WAIVER">Has Tuition Waiver (&gt; 0%)</option>
             <option value="NO_WAIVER">Standard Tuition (0% Waiver)</option>
           </select>
@@ -262,7 +337,7 @@ export default function StudentManagement() {
                 <th className="py-3 px-4">Programme & Dept</th>
                 <th className="py-3 px-4">Batch / Sem</th>
                 <th className="py-3 px-4">Tuition Waiver %</th>
-                <th className="py-3 px-4">Fine Exception</th>
+                <th className="py-3 px-4">Login Mode</th>
                 <th className="py-3 px-4">Academic Status</th>
                 <th className="py-3 px-4 text-right">Actions</th>
               </tr>
@@ -316,20 +391,16 @@ export default function StudentManagement() {
                     </td>
 
                     <td className="py-3.5 px-4">
-                      {s.fineException ? (
-                        <span className="bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded text-[10px] font-bold">
-                          EXEMPTED
-                        </span>
-                      ) : (
-                        <span className="text-slate-400 text-[11px]">Standard Rules</span>
-                      )}
+                      <span className="bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded text-[10px] font-bold">
+                        Direct ID Login
+                      </span>
                     </td>
 
                     <td className="py-3.5 px-4">
                       <span
                         className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase tracking-wide ${
                           s.academicStatus === 'REGULAR'
-                            ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                             : 'bg-rose-50 text-rose-700 border border-rose-200'
                         }`}
                       >
@@ -345,15 +416,7 @@ export default function StudentManagement() {
                           title="Assign or modify tuition waiver"
                         >
                           <Percent className="w-3 h-3" />
-                          Waiver
-                        </button>
-
-                        <button
-                          onClick={() => openPwdModal(s)}
-                          className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl transition"
-                          title="Reset student password"
-                        >
-                          <KeyRound className="w-3.5 h-3.5" />
+                          Configure Waiver
                         </button>
                       </div>
                     </td>
@@ -364,6 +427,94 @@ export default function StudentManagement() {
           </table>
         </div>
       </div>
+
+      {/* BULK CSV IMPORT MODAL */}
+      {csvModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-2xl w-full p-6 shadow-2xl my-8">
+            <div className="flex justify-between items-center pb-4 border-b border-slate-100">
+              <div>
+                <h3 className="text-base font-extrabold text-slate-900 flex items-center gap-2">
+                  <FileSpreadsheet className="w-5 h-5 text-blue-600" />
+                  Bulk Student Batch Onboarding (CSV Import)
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Automatically provisions Student IDs (passwordless login), programme fees, waivers, and 4-installment invoices
+                </p>
+              </div>
+              <button
+                onClick={() => setCsvModal(false)}
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-slate-100"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleBulkCsvSubmit} className="space-y-4 mt-4 text-xs">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <label className="cursor-pointer inline-flex items-center gap-2 px-3.5 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-xl font-bold transition">
+                  <Upload className="w-4 h-4" />
+                  Upload .CSV File
+                  <input type="file" accept=".csv,text/csv" onChange={handleCsvFileUpload} className="hidden" />
+                </label>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCsvContent(SAMPLE_BATCH_CSV);
+                    setCsvResult(null);
+                  }}
+                  className="text-blue-600 hover:underline font-bold"
+                >
+                  Reset to Sample Batch 56 CSV Template
+                </button>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  CSV Batch Content (Editable)
+                </label>
+                <textarea
+                  rows="7"
+                  value={csvContent}
+                  onChange={(e) => setCsvContent(e.target.value)}
+                  className="w-full p-3 bg-slate-900 text-emerald-300 font-mono text-[11px] rounded-2xl border border-slate-700 focus:outline-none"
+                />
+              </div>
+
+              {csvResult && (
+                <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl text-emerald-950 space-y-1">
+                  <div className="font-extrabold flex items-center gap-1.5 text-emerald-800">
+                    <CheckCircle2 className="w-4 h-4" />
+                    {csvResult.message}
+                  </div>
+                  <div className="text-[11px] text-emerald-700">
+                    Created: <span className="font-bold">{csvResult.createdCount}</span> • Skipped/Existing:{' '}
+                    <span className="font-bold">{csvResult.skippedCount}</span>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setCsvModal(false)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl"
+                >
+                  Close
+                </button>
+                <button
+                  type="submit"
+                  disabled={importingCsv}
+                  className="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold rounded-xl shadow-md"
+                >
+                  {importingCsv ? 'Importing Batch...' : 'Execute Bulk CSV Import'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* CREATE STUDENT MODAL */}
       {createModal && (
@@ -376,7 +527,7 @@ export default function StudentManagement() {
                   Metropolitan University Student Registration
                 </h3>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Pre-loads official Bateshwar fee structure and calculates net monthly tuition
+                  Pre-loads official Bateshwar fee structure and enables passwordless Student ID login
                 </p>
               </div>
               <button
@@ -395,10 +546,10 @@ export default function StudentManagement() {
             )}
 
             <form onSubmit={handleCreateStudent} className="space-y-5 mt-4 text-xs">
-              {/* Section 1: Identity & Credentials */}
+              {/* Section 1: Identity & Direct Student ID Login */}
               <div>
                 <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2">
-                  1. Student Identity & Login Credentials
+                  1. Student Identity (Passwordless Student ID Authentication)
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
@@ -438,17 +589,6 @@ export default function StudentManagement() {
                   </div>
 
                   <div>
-                    <label className="block font-bold text-slate-700 mb-1">Initial Password *</label>
-                    <input
-                      type="password"
-                      required
-                      value={form.password}
-                      onChange={(e) => setForm({ ...form, password: e.target.value })}
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-slate-800"
-                    />
-                  </div>
-
-                  <div>
                     <label className="block font-bold text-slate-700 mb-1">Contact Phone</label>
                     <input
                       type="text"
@@ -471,6 +611,12 @@ export default function StudentManagement() {
                       <option value="SUSPENDED">SUSPENDED</option>
                       <option value="ALUMNI">ALUMNI</option>
                     </select>
+                  </div>
+
+                  <div className="flex items-center">
+                    <div className="p-2.5 bg-blue-50 border border-blue-200 rounded-xl text-[11px] text-blue-800 font-medium w-full">
+                      No password required — Student logs in directly with <span className="font-mono font-bold">{form.studentIdNumber || 'Student ID'}</span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -729,51 +875,6 @@ export default function StudentManagement() {
           </div>
         </div>
       )}
-
-      {/* PASSWORD RESET MODAL */}
-      {pwdModal && selectedStudent && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl">
-            <h3 className="font-bold text-base text-slate-900 mb-1 flex items-center gap-2">
-              <KeyRound className="w-5 h-5 text-purple-600" />
-              Reset Portal Password
-            </h3>
-            <p className="text-xs text-slate-500 mb-4">
-              Student ID: <span className="font-mono font-bold text-slate-800">{selectedStudent.studentIdNumber}</span>
-            </p>
-
-            <form onSubmit={handleResetPassword} className="space-y-3.5 text-xs">
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">New Password</label>
-                <input
-                  type="text"
-                  required
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-mono text-slate-900"
-                />
-              </div>
-
-              <div className="flex gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setPwdModal(false)}
-                  className="w-1/2 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="w-1/2 py-2 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl shadow-md"
-                >
-                  Confirm Reset
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
-

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { clearanceApi, departmentApi } from '../services/api';
+import { clearanceApi, departmentApi, enrollmentPaperApi } from '../services/api';
 import {
   Building2,
   CheckCircle,
@@ -11,16 +11,21 @@ import {
   UserCheck,
   Check,
   X,
-  FileText
+  FileText,
+  BookOpen,
+  GraduationCap
 } from 'lucide-react';
 
 export default function OfficerDashboard() {
   const { user } = useAuth();
+  const [activeTab, setActiveTab] = useState('clearance'); // 'clearance' | 'advisor'
   const [clearances, setClearances] = useState([]);
   const [departments, setDepartments] = useState([]);
+  const [advisorQueue, setAdvisorQueue] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
+  const [reviewingStudentId, setReviewingStudentId] = useState(null);
 
   // Sign-off Modal
   const [actionModal, setActionModal] = useState({
@@ -44,19 +49,23 @@ export default function OfficerDashboard() {
   const fetchData = async () => {
     try {
       setLoading(true);
-      const [clearancesRes, deptsRes] = await Promise.all([
+      const [clearancesRes, deptsRes, advisorRes] = await Promise.allSettled([
         clearanceApi.getAll(),
-        departmentApi.list()
+        departmentApi.list(),
+        enrollmentPaperApi.getAdvisorQueue()
       ]);
 
-      if (clearancesRes.data.success) {
-        setClearances(clearancesRes.data.clearances);
+      if (clearancesRes.status === 'fulfilled' && clearancesRes.value.data.success) {
+        setClearances(clearancesRes.value.data.clearances);
       }
-      if (deptsRes.data.success) {
-        setDepartments(deptsRes.data.departments);
+      if (deptsRes.status === 'fulfilled' && deptsRes.value.data.success) {
+        setDepartments(deptsRes.value.data.departments);
+      }
+      if (advisorRes.status === 'fulfilled' && advisorRes.value.data.success) {
+        setAdvisorQueue(advisorRes.value.data.queue || []);
       }
     } catch (err) {
-      console.error('Error fetching data:', err);
+      console.error('Error fetching officer data:', err);
     } finally {
       setLoading(false);
     }
@@ -103,6 +112,32 @@ export default function OfficerDashboard() {
     }
   };
 
+  const handleAdvisorDecision = async (studentId, decision) => {
+    const remarks =
+      decision === 'REJECTED'
+        ? window.prompt('Enter reason for returning course selection for revision:', 'Please adjust credit load or prerequisite courses.')
+        : 'Approved by Department Head / Academic Advisor';
+
+    if (decision === 'REJECTED' && remarks === null) return;
+
+    try {
+      setReviewingStudentId(studentId);
+      const res = await enrollmentPaperApi.advisorReview({
+        studentId,
+        decision,
+        remarks
+      });
+      if (res.data.success) {
+        alert(res.data.message);
+        fetchData();
+      }
+    } catch (err) {
+      alert(err.response?.data?.message || 'Failed to submit advisor course decision.');
+    } finally {
+      setReviewingStudentId(null);
+    }
+  };
+
   // Find department of officer
   const officerDept = departments.find((d) => d.id === user?.departmentId);
 
@@ -121,6 +156,8 @@ export default function OfficerDashboard() {
     return true;
   });
 
+  const pendingAdvisorCount = advisorQueue.filter((q) => q.advisorStatus === 'PENDING_APPROVAL').length;
+
   return (
     <div className="max-w-7xl mx-auto px-4 py-8 space-y-6">
       {/* Header */}
@@ -128,10 +165,10 @@ export default function OfficerDashboard() {
         <div>
           <div className="flex items-center gap-2">
             <span className="bg-blue-100 text-blue-700 text-xs font-bold px-2.5 py-0.5 rounded-full uppercase">
-              {officerDept ? officerDept.name : 'Institutional Officer Portal'}
+              {officerDept ? officerDept.name : 'Institutional Officer & Advisor Portal'}
             </span>
           </div>
-          <h1 className="text-2xl font-bold text-slate-900 mt-1">Department Clearance Sign-Off</h1>
+          <h1 className="text-2xl font-bold text-slate-900 mt-1">Department Sign-Off & Academic Advising</h1>
           <p className="text-slate-500 text-sm">
             Officer: <span className="font-semibold text-slate-800">{user?.fullName}</span> | Department:{' '}
             <span className="font-semibold text-blue-600">{officerDept ? officerDept.name : 'All Departments (Admin)'}</span>
@@ -151,133 +188,289 @@ export default function OfficerDashboard() {
             />
           </div>
 
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
-          >
-            <option value="ALL">All Statuses</option>
-            <option value="IN_PROGRESS">In Progress</option>
-            <option value="APPROVED">Fully Approved</option>
-            <option value="REJECTED">Rejected</option>
-          </select>
+          {activeTab === 'clearance' && (
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="ALL">All Statuses</option>
+              <option value="IN_PROGRESS">In Progress</option>
+              <option value="APPROVED">Fully Approved</option>
+              <option value="REJECTED">Rejected</option>
+            </select>
+          )}
         </div>
       </div>
 
-      {/* Clearance Table */}
-      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
-        <div className="px-6 py-4 border-b border-slate-200 flex justify-between items-center bg-slate-50/50">
-          <h3 className="font-bold text-slate-800 text-sm">
-            Clearance Applications ({filteredClearances.length})
-          </h3>
-          <span className="text-xs text-slate-500">Live Clearance Validation Pipeline</span>
+      {/* Mode Switcher Tabs */}
+      <div className="flex border-b border-slate-200 gap-3 text-xs font-bold">
+        <button
+          onClick={() => setActiveTab('clearance')}
+          className={`pb-3 px-4 border-b-2 transition flex items-center gap-2 ${
+            activeTab === 'clearance'
+              ? 'border-blue-600 text-blue-600'
+              : 'border-transparent text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <Building2 className="w-4 h-4" />
+          1. Final Graduation Clearance Sign-Off ({filteredClearances.length})
+        </button>
+
+        <button
+          onClick={() => setActiveTab('advisor')}
+          className={`pb-3 px-4 border-b-2 transition flex items-center gap-2 ${
+            activeTab === 'advisor'
+              ? 'border-blue-600 text-blue-600'
+              : 'border-transparent text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <BookOpen className="w-4 h-4" />
+          2. Academic Advisor Course Approval Queue ({advisorQueue.length})
+          {pendingAdvisorCount > 0 && (
+            <span className="bg-amber-500 text-white text-[10px] font-extrabold px-2 py-0.5 rounded-full">
+              {pendingAdvisorCount} Pending
+            </span>
+          )}
+        </button>
+      </div>
+
+      {/* TAB 1: Clearance Table */}
+      {activeTab === 'clearance' && (
+        <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+          <div className="px-6 py-4 border-b border-slate-200 flex justify-between items-center bg-slate-50/50">
+            <h3 className="font-bold text-slate-800 text-sm">
+              Clearance Applications ({filteredClearances.length})
+            </h3>
+            <span className="text-xs text-slate-500">Live 3-Stage Clearance Validation Pipeline</span>
+          </div>
+
+          {loading ? (
+            <div className="py-12 text-center text-slate-500 text-sm">Loading applications...</div>
+          ) : filteredClearances.length === 0 ? (
+            <div className="py-12 text-center text-slate-500 text-sm">No clearance applications found.</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold uppercase tracking-wider">
+                    <th className="py-3 px-4">Student</th>
+                    <th className="py-3 px-4">Session & Type</th>
+                    <th className="py-3 px-4">Overall Status</th>
+                    <th className="py-3 px-4">Your Department Sign-Off</th>
+                    <th className="py-3 px-4">Dues Status</th>
+                    <th className="py-3 px-4 text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredClearances.map((c) => {
+                    const deptApproval =
+                      c.departmentApprovals?.find((a) => a.departmentId === user?.departmentId) ||
+                      c.departmentApprovals?.[0];
+
+                    const isDeptApproved = deptApproval?.status === 'APPROVED';
+
+                    return (
+                      <tr key={c.id} className="hover:bg-slate-50/80 transition">
+                        <td className="py-3.5 px-4">
+                          <div className="font-bold text-slate-900 text-sm">{c.student?.fullName}</div>
+                          <div className="font-mono text-slate-500 text-[11px]">{c.student?.matricOrStaffId}</div>
+                        </td>
+                        <td className="py-3.5 px-4">
+                          <span className="font-medium text-slate-800">{c.clearanceType}</span>
+                          <div className="text-slate-400 text-[11px]">{c.academicSession}</div>
+                        </td>
+                        <td className="py-3.5 px-4">
+                          <span
+                            className={`inline-flex items-center gap-1 font-semibold px-2 py-0.5 rounded-full text-[11px] ${
+                              c.status === 'APPROVED'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : c.status === 'REJECTED'
+                                ? 'bg-rose-100 text-rose-800'
+                                : 'bg-amber-100 text-amber-800'
+                            }`}
+                          >
+                            {c.status}
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-4">
+                          {deptApproval ? (
+                            <div>
+                              <span
+                                className={`inline-flex items-center gap-1 font-semibold px-2 py-0.5 rounded-md text-[11px] ${
+                                  isDeptApproved
+                                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                    : deptApproval.status === 'REJECTED'
+                                    ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                                    : 'bg-slate-100 text-slate-700'
+                                }`}
+                              >
+                                {deptApproval.department?.name}: {deptApproval.status}
+                              </span>
+                              {deptApproval.remarks && (
+                                <p className="text-[10px] text-slate-500 mt-0.5 truncate max-w-xs italic">
+                                  "{deptApproval.remarks}"
+                                </p>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-slate-400">N/A</span>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-4 font-mono">
+                          {deptApproval?.duesAmount > 0 ? (
+                            deptApproval.duesPaid ? (
+                              <span className="text-emerald-600 font-semibold">Settled (Tk. 0)</span>
+                            ) : (
+                              <span className="text-amber-600 font-semibold font-mono">
+                                Due: Tk. {deptApproval.duesAmount}
+                              </span>
+                            )
+                          ) : (
+                            <span className="text-slate-400">No Dues</span>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-4 text-right">
+                          {deptApproval && (
+                            <button
+                              onClick={() => handleOpenAction(c, deptApproval)}
+                              className="bg-blue-600 hover:bg-blue-700 text-white font-medium px-3 py-1.5 rounded-lg text-xs shadow-xs transition inline-flex items-center gap-1"
+                            >
+                              <UserCheck className="w-3.5 h-3.5" />
+                              Review & Sign
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
+      )}
 
-        {loading ? (
-          <div className="py-12 text-center text-slate-500 text-sm">Loading applications...</div>
-        ) : filteredClearances.length === 0 ? (
-          <div className="py-12 text-center text-slate-500 text-sm">No clearance applications found.</div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-xs">
-              <thead>
-                <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold uppercase tracking-wider">
-                  <th className="py-3 px-4">Student</th>
-                  <th className="py-3 px-4">Session & Type</th>
-                  <th className="py-3 px-4">Overall Status</th>
-                  <th className="py-3 px-4">Your Department Sign-Off</th>
-                  <th className="py-3 px-4">Dues Status</th>
-                  <th className="py-3 px-4 text-right">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {filteredClearances.map((c) => {
-                  // Find the approval for the officer's department, or first pending if admin
-                  const deptApproval =
-                    c.departmentApprovals?.find((a) => a.departmentId === user?.departmentId) ||
-                    c.departmentApprovals?.[0];
+      {/* TAB 2: Academic Advisor Course Selection Approval Queue */}
+      {activeTab === 'advisor' && (
+        <div className="space-y-4">
+          <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 text-xs text-blue-900 flex items-center justify-between">
+            <div>
+              <span className="font-bold text-blue-950 block">Department Head & Academic Advisor Course Verification</span>
+              <span>
+                Review student semester course selections (including Regular & Retake/Improvement courses up to 18.0 credits). Approving a student's selection unlocks their official Course Enrollment Paper once their Semester Registration Fee is verified.
+              </span>
+            </div>
+          </div>
 
-                  const isDeptApproved = deptApproval?.status === 'APPROVED';
-
-                  return (
-                    <tr key={c.id} className="hover:bg-slate-50/80 transition">
-                      <td className="py-3.5 px-4">
-                        <div className="font-bold text-slate-900 text-sm">{c.student?.fullName}</div>
-                        <div className="font-mono text-slate-500 text-[11px]">{c.student?.matricOrStaffId}</div>
-                      </td>
-                      <td className="py-3.5 px-4">
-                        <span className="font-medium text-slate-800">{c.clearanceType}</span>
-                        <div className="text-slate-400 text-[11px]">{c.academicSession}</div>
-                      </td>
-                      <td className="py-3.5 px-4">
+          {advisorQueue.length === 0 ? (
+            <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center text-slate-500 text-sm">
+              No student course selections submitted yet.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-4">
+              {advisorQueue
+                .filter(
+                  (item) =>
+                    item.fullName?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                    item.studentId?.toLowerCase().includes(searchTerm.toLowerCase())
+                )
+                .map((item) => (
+                  <div
+                    key={item.userId}
+                    className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs flex flex-col lg:flex-row justify-between gap-4"
+                  >
+                    <div className="space-y-3 flex-1">
+                      <div className="flex flex-wrap items-center gap-2.5">
+                        <span className="font-bold text-sm text-slate-900">{item.fullName}</span>
+                        <span className="font-mono text-xs font-bold text-blue-700 bg-blue-50 px-2.5 py-0.5 rounded-md">
+                          {item.studentId}
+                        </span>
+                        <span className="text-xs text-slate-500">
+                          {item.department} • Batch {item.batch} • Semester {item.semester}
+                        </span>
+                        {item.advisorStatus === 'APPROVED' ? (
+                          <span className="text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2.5 py-0.5 rounded-full inline-flex items-center gap-1">
+                            <CheckCircle className="w-3 h-3" /> Advisor Approved
+                          </span>
+                        ) : item.advisorStatus === 'PENDING_APPROVAL' ? (
+                          <span className="text-[10px] font-bold bg-amber-100 text-amber-800 px-2.5 py-0.5 rounded-full inline-flex items-center gap-1">
+                            <Clock className="w-3 h-3" /> Awaiting Advisor Sign-Off
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-bold bg-rose-100 text-rose-800 px-2.5 py-0.5 rounded-full inline-flex items-center gap-1">
+                            <X className="w-3 h-3" /> Returned for Revision
+                          </span>
+                        )}
                         <span
-                          className={`inline-flex items-center gap-1 font-semibold px-2 py-0.5 rounded-full text-[11px] ${
-                            c.status === 'APPROVED'
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : c.status === 'REJECTED'
-                              ? 'bg-rose-100 text-rose-800'
-                              : 'bg-amber-100 text-amber-800'
+                          className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full ${
+                            item.isFeePaid
+                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                              : 'bg-rose-50 text-rose-700 border border-rose-200'
                           }`}
                         >
-                          {c.status}
+                          Reg Fee: {item.isFeePaid ? 'Paid' : 'Unpaid'}
                         </span>
-                      </td>
-                      <td className="py-3.5 px-4">
-                        {deptApproval ? (
-                          <div>
-                            <span
-                              className={`inline-flex items-center gap-1 font-semibold px-2 py-0.5 rounded-md text-[11px] ${
-                                isDeptApproved
-                                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                                  : deptApproval.status === 'REJECTED'
-                                  ? 'bg-rose-50 text-rose-700 border border-rose-200'
-                                  : 'bg-slate-100 text-slate-700'
-                              }`}
-                            >
-                              {deptApproval.department?.name}: {deptApproval.status}
+                      </div>
+
+                      <div className="flex flex-wrap gap-2">
+                        {item.courses.map((c, idx) => (
+                          <div
+                            key={idx}
+                            className={`px-3 py-1.5 rounded-xl border text-xs flex items-center gap-2 ${
+                              c.courseType === 'RETAKE'
+                                ? 'bg-amber-50/70 border-amber-200 text-amber-950'
+                                : 'bg-slate-50 border-slate-200 text-slate-800'
+                            }`}
+                          >
+                            <span className="font-mono font-bold">{c.code}</span>
+                            <span className="text-slate-600">{c.title}</span>
+                            <span className="font-mono font-bold text-[10px] bg-white px-1.5 py-0.5 rounded border border-slate-200">
+                              {Number(c.credits).toFixed(1)} Cr
                             </span>
-                            {deptApproval.remarks && (
-                              <p className="text-[10px] text-slate-500 mt-0.5 truncate max-w-xs italic">
-                                "{deptApproval.remarks}"
-                              </p>
+                            {c.courseType === 'RETAKE' && (
+                              <span className="text-[9px] font-extrabold uppercase bg-amber-500 text-white px-1.5 py-0.5 rounded">
+                                Retake
+                              </span>
                             )}
                           </div>
-                        ) : (
-                          <span className="text-slate-400">N/A</span>
-                        )}
-                      </td>
-                      <td className="py-3.5 px-4 font-mono">
-                        {deptApproval?.duesAmount > 0 ? (
-                          deptApproval.duesPaid ? (
-                            <span className="text-emerald-600 font-semibold">Settled ($0.00)</span>
-                          ) : (
-                            <span className="text-amber-600 font-semibold font-mono">
-                              Due: ${deptApproval.duesAmount}
-                            </span>
-                          )
-                        ) : (
-                          <span className="text-slate-400">No Dues</span>
-                        )}
-                      </td>
-                      <td className="py-3.5 px-4 text-right">
-                        {deptApproval && (
-                          <button
-                            onClick={() => handleOpenAction(c, deptApproval)}
-                            className="bg-blue-600 hover:bg-blue-700 text-white font-medium px-3 py-1.5 rounded-lg text-xs shadow-xs transition inline-flex items-center gap-1"
-                          >
-                            <UserCheck className="w-3.5 h-3.5" />
-                            Review & Sign
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-row lg:flex-col justify-between items-end gap-2 shrink-0 border-t lg:border-t-0 pt-3 lg:pt-0 border-slate-100">
+                      <div className="text-right">
+                        <span className="text-[10px] font-bold uppercase text-slate-400 block">Total Credit Load</span>
+                        <span className="font-mono text-base font-extrabold text-slate-900">
+                          {Number(item.totalCredits).toFixed(1)} / 18.0 Cr.
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleAdvisorDecision(item.userId, 'APPROVED')}
+                          disabled={reviewingStudentId === item.userId}
+                          className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold px-3.5 py-2 rounded-xl text-xs shadow-xs transition inline-flex items-center gap-1"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                          Approve Courses
+                        </button>
+                        <button
+                          onClick={() => handleAdvisorDecision(item.userId, 'REJECTED')}
+                          disabled={reviewingStudentId === item.userId}
+                          className="bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold px-3 py-2 rounded-xl text-xs transition inline-flex items-center gap-1"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                          Return
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Review & Sign-Off Modal */}
       {actionModal.isOpen && (
@@ -345,11 +538,11 @@ export default function OfficerDashboard() {
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
-                  Department Dues / Penalty Amount ($)
+                  Department Dues / Penalty Amount (BDT)
                 </label>
                 <input
                   type="number"
-                  step="0.01"
+                  step="1"
                   min="0"
                   value={actionModal.duesAmount}
                   onChange={(e) => setActionModal({ ...actionModal, duesAmount: e.target.value })}
@@ -365,7 +558,7 @@ export default function OfficerDashboard() {
                   rows="3"
                   value={actionModal.remarks}
                   onChange={(e) => setActionModal({ ...actionModal, remarks: e.target.value })}
-                  placeholder="e.g. All laboratory instruments accounted for; clearance granted."
+                  placeholder="e.g. All thesis requirements and departmental obligations satisfied."
                   className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
                 ></textarea>
               </div>
@@ -393,4 +586,3 @@ export default function OfficerDashboard() {
     </div>
   );
 }
-

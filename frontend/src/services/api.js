@@ -51,6 +51,7 @@ export const studentAdminApi = {
   list: (params) => api.get('/admin/students', { params }),
   get: (id) => api.get(`/admin/students/${id}`),
   create: (data) => api.post('/admin/students', data),
+  bulkImport: (data) => api.post('/admin/students/bulk-import', data),
   update: (id, data) => api.put(`/admin/students/${id}`, data),
   assignWaiver: (id, data) => api.post(`/admin/students/${id}/waiver`, data),
   resetPassword: (id, data) => api.post(`/admin/students/${id}/reset-password`, data)
@@ -71,9 +72,12 @@ export const fineApi = {
   waive: (studentId, data) => api.post(`/fines/student/${studentId}/waive`, data)
 };
 
-// Course Enrollment Paper endpoints
+// Course Enrollment Paper & Course Selection endpoints
 export const enrollmentPaperApi = {
   getStatus: () => api.get('/enrollment-paper/status'),
+  selectCourses: (data) => api.post('/enrollment-paper/select-courses', data),
+  getAdvisorQueue: () => api.get('/enrollment-paper/advisor-queue'),
+  advisorReview: (data) => api.post('/enrollment-paper/advisor-review', data),
   downloadUrl: `${API_BASE}/enrollment-paper/download`
 };
 
@@ -88,11 +92,16 @@ export const admitCardApi = {
   grantOverride: (data) => api.post('/admit-card/override', data)
 };
 
-// Accounts Office Verification Queue endpoints
+// Accounts Office Verification Queue & Reconciliation endpoints
 export const accountsApi = {
   getVerificationQueue: () => api.get('/accounts/verification-queue'),
   verifyBankDeposit: (paymentId, data) => api.patch(`/accounts/verify/${paymentId}`, data),
   rejectBankDeposit: (paymentId, data) => api.patch(`/accounts/reject/${paymentId}`, data),
+  reconcileCsv: (data) => api.post('/accounts/reconcile-csv', data),
+  sampleStatementCsvUrl: `${API_BASE}/accounts/sample-statement-csv`,
+  defaultersCsvUrl: `${API_BASE}/accounts/reports/defaulters-csv`,
+  defaultersPdfUrl: `${API_BASE}/accounts/reports/defaulters-pdf`,
+  collectionsPdfUrl: `${API_BASE}/accounts/reports/collections-pdf`,
   receiptUrl: (paymentId) => `${API_BASE}/accounts/receipt/${paymentId}`
 };
 
@@ -102,9 +111,11 @@ export const departmentApi = {
   create: (data) => api.post('/departments', data)
 };
 
-// Payment endpoints
+// Payment endpoints (Bank Deposit + SSLCommerz / bKash / Nagad Sandbox Gateway)
 export const paymentApi = {
   process: (data) => api.post('/payments/process', data),
+  initiateGateway: (data) => api.post('/payments/gateway/initiate', data),
+  verifyGatewayWebhook: (data) => api.post('/payments/gateway/webhook', data),
   getHistory: () => api.get('/payments/history')
 };
 

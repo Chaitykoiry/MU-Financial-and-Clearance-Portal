@@ -25,7 +25,12 @@ import {
   X,
   ShieldCheck,
   Percent,
-  TrendingDown
+  TrendingDown,
+  Upload,
+  Smartphone,
+  Zap,
+  RefreshCw,
+  Image as ImageIcon
 } from 'lucide-react';
 
 export default function StudentDashboard() {
@@ -35,18 +40,38 @@ export default function StudentDashboard() {
   const [enrollmentStatus, setEnrollmentStatus] = useState(null);
   const [admitCardStatus, setAdmitCardStatus] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('finance'); // 'finance' | 'enrollment' | 'admitCard' | 'clearance' | 'history'
+  const [activeTab, setActiveTab] = useState('finance'); // 'finance' | 'enrollment' | 'admitCard' | 'clearance'
 
-  // Bank Deposit Modal State
+  // Bank Deposit Modal State (with Real Slip Upload)
   const [bankModal, setBankModal] = useState({
     isOpen: false,
     slipNumber: '',
     bankBranch: 'NRBC Bank, Metropolitan University Campus Branch, Bateshwar',
     amount: 6400,
     purpose: 'Spring Term 2026 — 2nd Tuition Installment',
-    depositDate: '2026-02-12'
+    depositDate: '2026-02-12',
+    slipFileBase64: '',
+    slipFileName: ''
   });
   const [submittingSlip, setSubmittingSlip] = useState(false);
+
+  // SSLCommerz / bKash / Nagad Online Payment Gateway Modal State
+  const [gatewayModal, setGatewayModal] = useState({
+    isOpen: false,
+    step: 'config', // 'config' | 'checkout' | 'success'
+    gateway: 'BKASH_MFS', // 'BKASH_MFS' | 'NAGAD_MFS' | 'ONLINE_GATEWAY'
+    amount: 6400,
+    purpose: 'Spring Term 2026 — 2nd Tuition Installment',
+    accountNumber: '01711-223344',
+    otpCode: '123456',
+    sessionData: null,
+    receiptData: null
+  });
+  const [processingGateway, setProcessingGateway] = useState(false);
+
+  // Interactive Course Selection State
+  const [selectedCourseMap, setSelectedCourseMap] = useState({}); // { [courseId]: 'REGULAR' | 'RETAKE' }
+  const [submittingCourses, setSubmittingCourses] = useState(false);
 
   useEffect(() => {
     loadAllStudentData();
@@ -69,7 +94,19 @@ export default function StudentDashboard() {
         setClearances(clrRes.value.data.clearances);
       }
       if (enrRes.status === 'fulfilled' && enrRes.value.data.success) {
-        setEnrollmentStatus(enrRes.value.data);
+        const enrData = enrRes.value.data;
+        setEnrollmentStatus(enrData);
+
+        // Initialize course selection map from existing enrolled/selected courses
+        if (enrData.availableCourses) {
+          const initialMap = {};
+          enrData.availableCourses.forEach((c) => {
+            if (c.isSelected) {
+              initialMap[c.id] = c.courseType || 'REGULAR';
+            }
+          });
+          setSelectedCourseMap(initialMap);
+        }
       }
       if (admRes.status === 'fulfilled' && admRes.value.data.success) {
         setAdmitCardStatus(admRes.value.data);
@@ -81,6 +118,24 @@ export default function StudentDashboard() {
     }
   };
 
+  const handleSlipFileChange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 10 * 1024 * 1024) {
+      alert('File size must be under 10 MB.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setBankModal((prev) => ({
+        ...prev,
+        slipFileBase64: reader.result,
+        slipFileName: file.name
+      }));
+    };
+    reader.readAsDataURL(file);
+  };
+
   const submitBankSlip = async (e) => {
     e.preventDefault();
     try {
@@ -90,18 +145,132 @@ export default function StudentDashboard() {
         purpose: bankModal.purpose,
         paymentMethod: 'NRBC_BANK_DEPOSIT',
         bankBranch: bankModal.bankBranch,
-        slipNumber: bankModal.slipNumber
+        slipNumber: bankModal.slipNumber,
+        slipFileBase64: bankModal.slipFileBase64 || undefined,
+        slipFileName: bankModal.slipFileName || undefined
       });
 
       if (res.data.success) {
-        alert('Deposit slip submitted successfully! Sent to Accounts Section for audit & verification.');
-        setBankModal({ ...bankModal, isOpen: false, slipNumber: '' });
+        alert('Deposit slip submitted with digital attachment! Sent to Accounts Section for side-by-side audit & verification.');
+        setBankModal({
+          ...bankModal,
+          isOpen: false,
+          slipNumber: '',
+          slipFileBase64: '',
+          slipFileName: ''
+        });
         loadAllStudentData();
       }
     } catch (err) {
       alert(err.response?.data?.message || 'Payment submission failed.');
     } finally {
       setSubmittingSlip(false);
+    }
+  };
+
+  const handleStartGatewaySession = async (e) => {
+    e.preventDefault();
+    try {
+      setProcessingGateway(true);
+      const res = await paymentApi.initiateGateway({
+        amount: parseFloat(gatewayModal.amount),
+        purpose: gatewayModal.purpose,
+        gateway: gatewayModal.gateway
+      });
+
+      if (res.data.success) {
+        setGatewayModal((prev) => ({
+          ...prev,
+          step: 'checkout',
+          sessionData: res.data.gatewaySession
+        }));
+      }
+    } catch (err) {
+      alert(err.response?.data?.message || 'Failed to initialize online payment gateway.');
+    } finally {
+      setProcessingGateway(false);
+    }
+  };
+
+  const handleConfirmGatewayWebhook = async (e) => {
+    e.preventDefault();
+    if (!gatewayModal.sessionData) return;
+    try {
+      setProcessingGateway(true);
+      const res = await paymentApi.verifyGatewayWebhook({
+        paymentId: gatewayModal.sessionData.paymentId,
+        gatewayTxId: gatewayModal.sessionData.gatewayTxId,
+        otpCode: gatewayModal.otpCode
+      });
+
+      if (res.data.success) {
+        setGatewayModal((prev) => ({
+          ...prev,
+          step: 'success',
+          receiptData: res.data.payment
+        }));
+        loadAllStudentData();
+      }
+    } catch (err) {
+      alert(err.response?.data?.message || 'Gateway verification failed.');
+    } finally {
+      setProcessingGateway(false);
+    }
+  };
+
+  const toggleCourseSelection = (courseId) => {
+    setSelectedCourseMap((prev) => {
+      const next = { ...prev };
+      if (next[courseId]) {
+        delete next[courseId];
+      } else {
+        next[courseId] = 'REGULAR';
+      }
+      return next;
+    });
+  };
+
+  const setCourseTypeForSelected = (courseId, type) => {
+    setSelectedCourseMap((prev) => ({
+      ...prev,
+      [courseId]: type
+    }));
+  };
+
+  const totalSelectedCredits = (enrollmentStatus?.availableCourses || []).reduce((sum, c) => {
+    return selectedCourseMap[c.id] ? sum + Number(c.credits || 0) : sum;
+  }, 0);
+
+  const handleSubmitCourseSelection = async () => {
+    const selectedIds = Object.keys(selectedCourseMap);
+    if (selectedIds.length === 0) {
+      alert('Please select at least one course for the semester.');
+      return;
+    }
+    if (totalSelectedCredits > 18.0) {
+      alert(`Total selected credits (${totalSelectedCredits.toFixed(1)}) exceed the maximum 18.0 credit limit.`);
+      return;
+    }
+
+    try {
+      setSubmittingCourses(true);
+      const coursesPayload = selectedIds.map((courseId) => ({
+        courseId,
+        courseType: selectedCourseMap[courseId]
+      }));
+
+      const res = await enrollmentPaperApi.selectCourses({
+        courses: coursesPayload
+      });
+
+      if (res.data.success) {
+        alert(res.data.message);
+        loadAllStudentData();
+      }
+    } catch (err) {
+      alert(err.response?.data?.message || 'Failed to submit course selection.');
+    } finally {
+      setSubmittingCourses(false);
     }
   };
 
@@ -148,13 +317,29 @@ export default function StudentDashboard() {
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <button
+            onClick={() =>
+              setGatewayModal({
+                ...gatewayModal,
+                isOpen: true,
+                step: 'config',
+                amount: financialData?.summary?.monthlyTuition || 6400,
+                purpose: 'Spring Term 2026 — Tuition Installment Payment'
+              })
+            }
+            className="flex items-center gap-2 bg-gradient-to-r from-pink-600 to-rose-600 hover:from-pink-500 hover:to-rose-500 text-white font-bold px-4 py-2.5 rounded-2xl shadow-md transition text-xs"
+          >
+            <Zap className="w-4 h-4 text-amber-200" />
+            Pay Online (bKash / Nagad / SSLCommerz)
+          </button>
+
           <button
             onClick={() => setBankModal({ ...bankModal, isOpen: true })}
             className="flex items-center gap-2 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 text-white font-bold px-4 py-2.5 rounded-2xl shadow-md transition text-xs"
           >
-            <CreditCard className="w-4 h-4 text-amber-300" />
-            Submit NRBC Bank Slip
+            <Upload className="w-4 h-4 text-amber-300" />
+            Upload NRBC Bank Slip
           </button>
         </div>
       </div>
@@ -182,9 +367,11 @@ export default function StudentDashboard() {
           }`}
         >
           <FileText className="w-4 h-4" />
-          Course Enrollment Paper
-          {enrollmentStatus?.isEligible && (
+          Course Selection & Enrollment Paper
+          {enrollmentStatus?.isEligible ? (
             <span className="w-2 h-2 rounded-full bg-emerald-500" />
+          ) : (
+            <span className="w-2 h-2 rounded-full bg-amber-500" />
           )}
         </button>
 
@@ -353,7 +540,7 @@ export default function StudentDashboard() {
               {financialData?.installments?.map((inst) => (
                 <div
                   key={inst.id}
-                  className={`p-4 rounded-2xl border transition ${
+                  className={`p-4 rounded-2xl border transition flex flex-col justify-between ${
                     inst.status === 'PAID'
                       ? 'bg-emerald-50/50 border-emerald-200'
                       : new Date() > new Date(inst.dueDate)
@@ -361,32 +548,52 @@ export default function StudentDashboard() {
                       : 'bg-slate-50 border-slate-200'
                   }`}
                 >
-                  <div className="flex justify-between items-start">
-                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-                      Installment #{inst.installmentNumber}
-                    </span>
-                    <Calendar className="w-4 h-4 text-slate-400" />
-                  </div>
-                  <div className="text-xl font-extrabold text-slate-800 mt-2 font-mono">
-                    Tk. {inst.amountBdt?.toLocaleString()}
-                  </div>
-                  <div className="text-[10px] text-slate-500 mt-1">
-                    Due: {new Date(inst.dueDate).toLocaleDateString()}
+                  <div>
+                    <div className="flex justify-between items-start">
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                        Installment #{inst.installmentNumber}
+                      </span>
+                      <Calendar className="w-4 h-4 text-slate-400" />
+                    </div>
+                    <div className="text-xl font-extrabold text-slate-800 mt-2 font-mono">
+                      Tk. {inst.amountBdt?.toLocaleString()}
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-1">
+                      Due: {new Date(inst.dueDate).toLocaleDateString()}
+                    </div>
                   </div>
 
-                  <div className="mt-3">
+                  <div className="mt-3 pt-2 border-t border-slate-200/60 flex items-center justify-between">
                     {inst.status === 'PAID' ? (
                       <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-md inline-flex items-center gap-1">
                         <CheckCircle className="w-3 h-3" /> Paid & Verified
                       </span>
-                    ) : new Date() > new Date(inst.dueDate) ? (
-                      <span className="text-[10px] font-bold text-rose-700 bg-rose-100 px-2 py-0.5 rounded-md inline-flex items-center gap-1">
-                        <Clock className="w-3 h-3" /> Overdue (Fine Applied)
-                      </span>
                     ) : (
-                      <span className="text-[10px] font-bold text-slate-600 bg-white border border-slate-200 px-2 py-0.5 rounded-md inline-block">
-                        Upcoming Due
-                      </span>
+                      <>
+                        {new Date() > new Date(inst.dueDate) ? (
+                          <span className="text-[10px] font-bold text-rose-700 bg-rose-100 px-2 py-0.5 rounded-md inline-flex items-center gap-1">
+                            <Clock className="w-3 h-3" /> Overdue
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-bold text-slate-600 bg-white border border-slate-200 px-2 py-0.5 rounded-md inline-block">
+                            Upcoming
+                          </span>
+                        )}
+                        <button
+                          onClick={() =>
+                            setGatewayModal({
+                              ...gatewayModal,
+                              isOpen: true,
+                              step: 'config',
+                              amount: inst.amountBdt,
+                              purpose: `Spring Term 2026 — Tuition Installment #${inst.installmentNumber}`
+                            })
+                          }
+                          className="text-[10px] font-bold text-pink-600 hover:text-pink-700 underline"
+                        >
+                          Pay Now →
+                        </button>
+                      </>
                     )}
                   </div>
                 </div>
@@ -455,73 +662,257 @@ export default function StudentDashboard() {
         </div>
       )}
 
-      {/* TAB 2: COURSE ENROLLMENT PAPER */}
+      {/* TAB 2: INTERACTIVE COURSE SELECTION & COURSE ENROLLMENT PAPER */}
       {activeTab === 'enrollment' && (
-        <div className="bg-white border border-slate-200 rounded-3xl p-8 shadow-xs max-w-3xl mx-auto space-y-6">
-          <div className="text-center space-y-2">
-            <div className="w-14 h-14 bg-blue-50 text-[#0f2b5c] rounded-2xl flex items-center justify-center mx-auto mb-2">
-              <FileText className="w-7 h-7" />
+        <div className="space-y-6 max-w-5xl mx-auto">
+          {/* Top Status & Download Card */}
+          <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-xs flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+            <div className="flex items-start gap-4">
+              <div className="w-12 h-12 bg-blue-50 text-[#0f2b5c] rounded-2xl flex items-center justify-center shrink-0">
+                <FileText className="w-6 h-6" />
+              </div>
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-lg font-extrabold text-slate-900">
+                    Spring 2026 Course Selection & Enrollment Paper
+                  </h2>
+                  {enrollmentStatus?.advisorApprovalStatus === 'APPROVED' ? (
+                    <span className="text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2.5 py-0.5 rounded-full inline-flex items-center gap-1">
+                      <CheckCircle className="w-3 h-3" /> Advisor Approved
+                    </span>
+                  ) : enrollmentStatus?.advisorApprovalStatus === 'PENDING_APPROVAL' ? (
+                    <span className="text-[10px] font-bold bg-amber-100 text-amber-800 px-2.5 py-0.5 rounded-full inline-flex items-center gap-1">
+                      <Clock className="w-3 h-3" /> Awaiting Advisor Sign-Off
+                    </span>
+                  ) : enrollmentStatus?.advisorApprovalStatus === 'REJECTED' ? (
+                    <span className="text-[10px] font-bold bg-rose-100 text-rose-800 px-2.5 py-0.5 rounded-full inline-flex items-center gap-1">
+                      <AlertCircle className="w-3 h-3" /> Revision Requested by Advisor
+                    </span>
+                  ) : null}
+                </div>
+                <p className="text-xs text-slate-500 mt-1">
+                  Select your regular and retake/improvement courses up to 18.0 credits. Both Semester Registration Fee verification and Department Advisor approval are required to unlock the official Course Enrollment Paper.
+                </p>
+              </div>
             </div>
-            <h2 className="text-xl font-extrabold text-slate-900">Course Enrollment Paper</h2>
-            <p className="text-xs text-slate-500 max-w-md mx-auto">
-              The official Course Enrollment Paper confirms your registered semester courses for Spring 2026 upon verified Semester Registration Fee payment.
-            </p>
+
+            <div className="shrink-0 w-full md:w-auto">
+              {enrollmentStatus?.isEligible ? (
+                <button
+                  onClick={() => downloadFileWithToken(enrollmentPaperApi.downloadUrl, `MU_Course_Enrollment_${user?.matricOrStaffId}.pdf`)}
+                  className="w-full md:w-auto inline-flex items-center justify-center gap-2 bg-[#0f2b5c] hover:bg-[#1a3d7c] text-white font-bold px-5 py-3 rounded-2xl shadow-lg transition text-xs"
+                >
+                  <Download className="w-4 h-4 text-amber-400" />
+                  Download Official Enrollment Paper (PDF)
+                </button>
+              ) : (
+                <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3 text-xs text-amber-900">
+                  <div className="font-bold flex items-center gap-1.5 text-amber-950">
+                    <ShieldAlert className="w-4 h-4 text-amber-600" />
+                    Enrollment Paper Locked
+                  </div>
+                  <div className="text-[11px] text-amber-800 mt-0.5">
+                    {!enrollmentStatus?.isFeePaid
+                      ? '• Semester Registration Fee (Tk. 15,000) is unpaid.'
+                      : '• Waiting for Department Advisor course approval.'}
+                  </div>
+                  {!enrollmentStatus?.isFeePaid && (
+                    <div className="mt-2 flex gap-2">
+                      <button
+                        onClick={() =>
+                          setGatewayModal({
+                            ...gatewayModal,
+                            isOpen: true,
+                            step: 'config',
+                            amount: 15000,
+                            purpose: 'Spring 2026 — Semester Registration Fee'
+                          })
+                        }
+                        className="bg-pink-600 hover:bg-pink-700 text-white font-bold px-3 py-1.5 rounded-xl text-[11px] transition"
+                      >
+                        Pay Tk. 15,000 Online (Instant)
+                      </button>
+                      <button
+                        onClick={() =>
+                          setBankModal({
+                            ...bankModal,
+                            isOpen: true,
+                            amount: 15000,
+                            purpose: 'Spring 2026 — Semester Registration Fee'
+                          })
+                        }
+                        className="bg-amber-600 hover:bg-amber-700 text-white font-bold px-3 py-1.5 rounded-xl text-[11px] transition"
+                      >
+                        Upload Bank Slip
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
 
-          <div className="border border-slate-200 rounded-2xl p-5 bg-slate-50/80 space-y-3 text-xs">
-            <div className="flex justify-between items-center pb-2 border-b border-slate-200">
-              <span className="font-bold text-slate-700">Semester Registration Fee Status:</span>
+          {/* 2-Step Verification Checklist Bar */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-white border border-slate-200 rounded-2xl p-4 flex items-center justify-between text-xs">
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Prerequisite 1</span>
+                <span className="font-bold text-slate-800">Semester Registration Fee (Tk. 15,000)</span>
+              </div>
               {enrollmentStatus?.isFeePaid ? (
-                <span className="font-bold text-emerald-700 bg-emerald-100 px-2.5 py-0.5 rounded-full inline-flex items-center gap-1">
-                  <CheckCircle className="w-3.5 h-3.5" /> Verified & Confirmed (Paid)
+                <span className="font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-full inline-flex items-center gap-1">
+                  <CheckCircle className="w-3.5 h-3.5" /> Paid & Verified
                 </span>
               ) : (
-                <span className="font-bold text-rose-700 bg-rose-100 px-2.5 py-0.5 rounded-full inline-flex items-center gap-1">
-                  <X className="w-3.5 h-3.5" /> Unpaid / Pending Verification
+                <span className="font-bold text-rose-700 bg-rose-50 border border-rose-200 px-3 py-1 rounded-full inline-flex items-center gap-1">
+                  <X className="w-3.5 h-3.5" /> Unpaid
                 </span>
               )}
             </div>
 
-            <div className="flex justify-between items-center text-slate-600">
-              <span>Required Registration Fee:</span>
-              <span className="font-mono font-bold text-slate-900">
-                Tk. {enrollmentStatus?.registrationFeeBdt?.toLocaleString() || '15,000'}
-              </span>
-            </div>
-
-            <div className="flex justify-between items-center text-slate-600">
-              <span>Registered Term:</span>
-              <span className="font-semibold text-slate-900">Spring Term 2026 (Semester 8)</span>
+            <div className="bg-white border border-slate-200 rounded-2xl p-4 flex items-center justify-between text-xs">
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Prerequisite 2</span>
+                <span className="font-bold text-slate-800">Department Head / Advisor Course Approval</span>
+              </div>
+              {enrollmentStatus?.isCourseApproved ? (
+                <span className="font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-full inline-flex items-center gap-1">
+                  <CheckCircle className="w-3.5 h-3.5" /> Approved ({enrollmentStatus?.totalCredits} Cr.)
+                </span>
+              ) : (
+                <span className="font-bold text-amber-700 bg-amber-50 border border-amber-200 px-3 py-1 rounded-full inline-flex items-center gap-1">
+                  <Clock className="w-3.5 h-3.5" /> {enrollmentStatus?.advisorApprovalStatus || 'Pending'}
+                </span>
+              )}
             </div>
           </div>
 
-          {enrollmentStatus?.isEligible ? (
-            <div className="text-center pt-2">
-              <button
-                onClick={() => downloadFileWithToken(enrollmentPaperApi.downloadUrl, `MU_Course_Enrollment_${user?.matricOrStaffId}.pdf`)}
-                className="inline-flex items-center gap-2 bg-[#0f2b5c] hover:bg-[#1a3d7c] text-white font-bold px-6 py-3 rounded-2xl shadow-lg transition text-xs"
-              >
-                <Download className="w-4 h-4 text-amber-400" />
-                Download Official Course Enrollment Paper (PDF)
-              </button>
-            </div>
-          ) : (
-            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-xs text-amber-900 space-y-2">
-              <div className="font-bold flex items-center gap-1.5 text-amber-950">
-                <ShieldAlert className="w-4 h-4 text-amber-600" />
-                Course Enrollment Paper is Locked
+          {/* Interactive Course Catalog Selection Table */}
+          <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pb-3 border-b border-slate-100">
+              <div>
+                <h3 className="text-sm font-extrabold text-slate-900 flex items-center gap-2">
+                  <BookOpen className="w-4 h-4 text-blue-600" />
+                  Interactive Semester Course Selection (Regular & Retake/Improvement)
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  Check the courses you wish to take this semester and designate whether each course is Regular or Retake/Improvement.
+                </p>
               </div>
-              <p>
-                To generate and download your Course Enrollment Paper, your Semester Registration Fee (Tk. 15,000) must be paid and verified by Accounts.
-              </p>
-              <button
-                onClick={() => setBankModal({ ...bankModal, isOpen: true, amount: 15000, purpose: 'Spring 2026 — Semester Registration Fee' })}
-                className="mt-1 bg-amber-600 hover:bg-amber-700 text-white font-bold px-4 py-2 rounded-xl text-xs transition"
-              >
-                Submit Semester Registration Payment
-              </button>
+
+              <div className="flex items-center gap-3">
+                <div className={`px-3 py-1.5 rounded-xl font-mono text-xs font-bold border ${
+                  totalSelectedCredits > 18
+                    ? 'bg-rose-50 text-rose-700 border-rose-200'
+                    : 'bg-blue-50 text-blue-800 border-blue-200'
+                }`}>
+                  Selected Credits: {totalSelectedCredits.toFixed(1)} / 18.0 Max
+                </div>
+
+                <button
+                  onClick={handleSubmitCourseSelection}
+                  disabled={submittingCourses || totalSelectedCredits === 0 || totalSelectedCredits > 18}
+                  className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold px-4 py-2 rounded-xl text-xs shadow-sm transition"
+                >
+                  {submittingCourses ? 'Submitting...' : 'Submit to Advisor for Approval'}
+                </button>
+              </div>
             </div>
-          )}
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold uppercase tracking-wider">
+                    <th className="py-3 px-4 w-10">Select</th>
+                    <th className="py-3 px-4">Course Code</th>
+                    <th className="py-3 px-4">Course Title</th>
+                    <th className="py-3 px-4 text-center">Credits</th>
+                    <th className="py-3 px-4 text-center">Enrollment Type</th>
+                    <th className="py-3 px-4 text-right">Current Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {enrollmentStatus?.availableCourses?.map((course) => {
+                    const isChecked = Boolean(selectedCourseMap[course.id]);
+                    const currentType = selectedCourseMap[course.id] || 'REGULAR';
+
+                    return (
+                      <tr
+                        key={course.id}
+                        className={`transition ${isChecked ? 'bg-blue-50/40' : 'hover:bg-slate-50'}`}
+                      >
+                        <td className="py-3 px-4 text-center">
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => toggleCourseSelection(course.id)}
+                            className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
+                          />
+                        </td>
+                        <td className="py-3 px-4 font-mono font-bold text-slate-900">
+                          {course.code}
+                        </td>
+                        <td className="py-3 px-4 font-medium text-slate-800">
+                          {course.title}
+                          <span className="block text-[10px] text-slate-400">Semester {course.semester}</span>
+                        </td>
+                        <td className="py-3 px-4 text-center font-mono font-bold text-slate-700">
+                          {Number(course.credits).toFixed(1)}
+                        </td>
+                        <td className="py-3 px-4 text-center">
+                          {isChecked ? (
+                            <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5">
+                              <button
+                                type="button"
+                                onClick={() => setCourseTypeForSelected(course.id, 'REGULAR')}
+                                className={`px-2.5 py-1 rounded-md text-[10px] font-bold transition ${
+                                  currentType === 'REGULAR'
+                                    ? 'bg-[#0f2b5c] text-white'
+                                    : 'text-slate-600 hover:bg-slate-100'
+                                }`}
+                              >
+                                Regular
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setCourseTypeForSelected(course.id, 'RETAKE')}
+                                className={`px-2.5 py-1 rounded-md text-[10px] font-bold transition ${
+                                  currentType === 'RETAKE'
+                                    ? 'bg-amber-600 text-white'
+                                    : 'text-slate-600 hover:bg-slate-100'
+                                }`}
+                              >
+                                Retake / Imp.
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-slate-400">—</span>
+                          )}
+                        </td>
+                        <td className="py-3 px-4 text-right">
+                          {course.enrollmentStatus === 'ENROLLED' || course.enrollmentStatus === 'RETAKE_APPROVED' ? (
+                            <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
+                              Approved ({course.courseType})
+                            </span>
+                          ) : course.enrollmentStatus === 'PENDING_APPROVAL' || course.enrollmentStatus === 'RETAKE_PENDING' ? (
+                            <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-2.5 py-0.5 rounded-full border border-amber-200">
+                              Pending Advisor
+                            </span>
+                          ) : course.enrollmentStatus === 'REJECTED' ? (
+                            <span className="text-[10px] font-bold text-rose-700 bg-rose-50 px-2.5 py-0.5 rounded-full border border-rose-200">
+                              Revision Needed
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-slate-400">Not Enrolled</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       )}
 
@@ -616,12 +1007,26 @@ export default function StudentDashboard() {
                   <li key={idx}>{reason}</li>
                 ))}
               </ul>
-              <div className="pt-1">
+              <div className="pt-1 flex flex-wrap gap-2">
+                <button
+                  onClick={() =>
+                    setGatewayModal({
+                      ...gatewayModal,
+                      isOpen: true,
+                      step: 'config',
+                      amount: financialData?.summary?.totalOutstanding || 6400,
+                      purpose: 'Spring 2026 — Full Examination Financial Clearance Settlement'
+                    })
+                  }
+                  className="bg-pink-600 hover:bg-pink-700 text-white font-bold px-4 py-2 rounded-xl text-xs transition"
+                >
+                  Pay Online Instantly (bKash / Nagad / Card)
+                </button>
                 <button
                   onClick={() => setBankModal({ ...bankModal, isOpen: true })}
                   className="bg-rose-600 hover:bg-rose-700 text-white font-bold px-4 py-2 rounded-xl text-xs transition"
                 >
-                  Settle Outstanding Dues via Bank Deposit
+                  Upload NRBC Bank Deposit Slip
                 </button>
               </div>
             </div>
@@ -748,12 +1153,15 @@ export default function StudentDashboard() {
         </div>
       )}
 
-      {/* Bank Deposit Slip Submission Modal */}
+      {/* MODAL 1: NRBC Bank Deposit Slip Submission (with File Upload & Preview) */}
       {bankModal.isOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-100">
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-100 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-4">
-              <h3 className="font-bold text-base text-slate-900">Submit NRBC Bank Deposit Slip</h3>
+              <div>
+                <h3 className="font-bold text-base text-slate-900">Submit NRBC Bank Deposit Slip</h3>
+                <p className="text-[11px] text-slate-500">Upload your physical bank deposit slip for Accounts Office side-by-side verification</p>
+              </div>
               <button onClick={() => setBankModal({ ...bankModal, isOpen: false })} className="text-slate-400 hover:text-slate-600 text-sm font-bold">
                 ✕
               </button>
@@ -768,27 +1176,28 @@ export default function StudentDashboard() {
                 </div>
               </div>
 
-              <div>
-                <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">Bank Branch Name</label>
-                <input
-                  type="text"
-                  required
-                  value={bankModal.bankBranch}
-                  onChange={(e) => setBankModal({ ...bankModal, bankBranch: e.target.value })}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">Deposit Slip / Scroll #</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. NRBC-SLIP-77382"
-                  value={bankModal.slipNumber}
-                  onChange={(e) => setBankModal({ ...bankModal, slipNumber: e.target.value })}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-mono"
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">Deposit Slip / Scroll #</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. NRBC-SLIP-77382"
+                    value={bankModal.slipNumber}
+                    onChange={(e) => setBankModal({ ...bankModal, slipNumber: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">Bank Branch Name</label>
+                  <input
+                    type="text"
+                    required
+                    value={bankModal.bankBranch}
+                    onChange={(e) => setBankModal({ ...bankModal, bankBranch: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl"
+                  />
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -816,13 +1225,67 @@ export default function StudentDashboard() {
 
               <div>
                 <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">Payment Purpose</label>
-                <input
-                  type="text"
-                  required
+                <select
                   value={bankModal.purpose}
-                  onChange={(e) => setBankModal({ ...bankModal, purpose: e.target.value })}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl"
-                />
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    let defaultAmt = bankModal.amount;
+                    if (val.includes('Semester Registration Fee')) defaultAmt = 15000;
+                    else if (val.includes('Tuition Installment')) defaultAmt = financialData?.summary?.monthlyTuition || 6400;
+                    setBankModal({ ...bankModal, purpose: val, amount: defaultAmt });
+                  }}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-medium"
+                >
+                  <option value="Spring Term 2026 — 2nd Tuition Installment">Spring Term 2026 — 2nd Tuition Installment</option>
+                  <option value="Spring Term 2026 — 3rd Tuition Installment">Spring Term 2026 — 3rd Tuition Installment</option>
+                  <option value="Spring Term 2026 — 4th Tuition Installment">Spring Term 2026 — 4th Tuition Installment</option>
+                  <option value="Spring 2026 — Semester Registration Fee">Spring 2026 — Semester Registration Fee (Tk. 15,000)</option>
+                  <option value="Spring 2026 — Full Outstanding Clearance">Spring 2026 — Full Outstanding Clearance</option>
+                </select>
+              </div>
+
+              {/* Real Slip Image / PDF Upload Dropzone */}
+              <div>
+                <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Attach Scanned Deposit Slip (PNG / JPG / PDF)
+                </label>
+                <label className="flex flex-col items-center justify-center border-2 border-dashed border-emerald-300 bg-emerald-50/40 hover:bg-emerald-50 rounded-2xl p-4 cursor-pointer transition text-center">
+                  <Upload className="w-6 h-6 text-emerald-600 mb-1" />
+                  <span className="font-bold text-emerald-900">
+                    {bankModal.slipFileName ? bankModal.slipFileName : 'Click to upload photo or scan of NRBC Bank Deposit Slip'}
+                  </span>
+                  <span className="text-[10px] text-slate-500 mt-0.5">
+                    Supports high-resolution image or PDF up to 10MB (Auto-generates digital voucher if omitted)
+                  </span>
+                  <input
+                    type="file"
+                    accept="image/*,application/pdf"
+                    onChange={handleSlipFileChange}
+                    className="hidden"
+                  />
+                </label>
+
+                {bankModal.slipFileBase64 && bankModal.slipFileBase64.startsWith('data:image/') && (
+                  <div className="mt-2 p-2 bg-slate-100 rounded-xl border border-slate-200 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <img
+                        src={bankModal.slipFileBase64}
+                        alt="Slip preview"
+                        className="w-14 h-10 object-cover rounded border border-slate-300"
+                      />
+                      <span className="text-[11px] font-semibold text-slate-700 truncate max-w-[200px]">
+                        {bankModal.slipFileName}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setBankModal({ ...bankModal, slipFileBase64: '', slipFileName: '' })}
+                      className="text-rose-600 font-bold text-[11px] px-2"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                )}
               </div>
 
               <button
@@ -830,9 +1293,203 @@ export default function StudentDashboard() {
                 disabled={submittingSlip}
                 className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold rounded-xl shadow-md transition"
               >
-                {submittingSlip ? 'Submitting to Accounts Queue...' : 'Confirm Bank Slip Submission'}
+                {submittingSlip ? 'Uploading & Submitting to Accounts Queue...' : 'Confirm & Upload Bank Deposit Slip'}
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 2: SSLCommerz / bKash / Nagad Sandbox Payment Gateway */}
+      {gatewayModal.isOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-3xl max-w-md w-full overflow-hidden shadow-2xl border border-slate-100">
+            {/* Gateway Header */}
+            <div className="bg-gradient-to-r from-[#0f2b5c] via-indigo-900 to-pink-700 p-5 text-white flex justify-between items-center">
+              <div className="flex items-center gap-2.5">
+                <Zap className="w-5 h-5 text-amber-300" />
+                <div>
+                  <h3 className="font-extrabold text-sm tracking-wide">SSLCommerz • MFS Instant Checkout</h3>
+                  <p className="text-[10px] text-blue-200">Metropolitan University Automated IPN Webhook Gateway</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setGatewayModal({ ...gatewayModal, isOpen: false, step: 'config' })}
+                className="text-white/70 hover:text-white text-sm font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-6 text-xs">
+              {gatewayModal.step === 'config' && (
+                <form onSubmit={handleStartGatewaySession} className="space-y-4">
+                  <div>
+                    <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                      Select Payment Channel
+                    </label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {[
+                        { id: 'BKASH_MFS', label: 'bKash MFS', color: 'border-pink-500 bg-pink-50 text-pink-900' },
+                        { id: 'NAGAD_MFS', label: 'Nagad MFS', color: 'border-orange-500 bg-orange-50 text-orange-900' },
+                        { id: 'ONLINE_GATEWAY', label: 'SSLCommerz Card', color: 'border-blue-600 bg-blue-50 text-blue-900' }
+                      ].map((ch) => (
+                        <button
+                          key={ch.id}
+                          type="button"
+                          onClick={() => setGatewayModal({ ...gatewayModal, gateway: ch.id })}
+                          className={`p-3 rounded-2xl border-2 font-bold text-center transition ${
+                            gatewayModal.gateway === ch.id
+                              ? ch.color
+                              : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100'
+                          }`}
+                        >
+                          {ch.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      Payment Purpose
+                    </label>
+                    <select
+                      value={gatewayModal.purpose}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        let amt = gatewayModal.amount;
+                        if (val.includes('Semester Registration')) amt = 15000;
+                        else if (val.includes('Tuition Installment')) amt = financialData?.summary?.monthlyTuition || 6400;
+                        else if (val.includes('Full Examination')) amt = financialData?.summary?.totalOutstanding || 6400;
+                        setGatewayModal({ ...gatewayModal, purpose: val, amount: amt });
+                      }}
+                      className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-medium"
+                    >
+                      <option value="Spring Term 2026 — Tuition Installment Payment">Spring Term 2026 — Tuition Installment Payment</option>
+                      <option value="Spring 2026 — Semester Registration Fee">Spring 2026 — Semester Registration Fee (Tk. 15,000)</option>
+                      <option value="Spring 2026 — Full Examination Financial Clearance Settlement">Spring 2026 — Full Examination Clearance Settlement</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      Payable Amount (BDT)
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      min="100"
+                      value={gatewayModal.amount}
+                      onChange={(e) => setGatewayModal({ ...gatewayModal, amount: e.target.value })}
+                      className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono text-base font-extrabold text-slate-900"
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={processingGateway}
+                    className="w-full py-3 bg-gradient-to-r from-pink-600 to-rose-600 hover:from-pink-500 hover:to-rose-500 text-white font-bold rounded-xl shadow-lg transition"
+                  >
+                    {processingGateway ? 'Creating Gateway Session...' : `Proceed to ${gatewayModal.gateway.replace('_', ' ')} Checkout →`}
+                  </button>
+                </form>
+              )}
+
+              {gatewayModal.step === 'checkout' && gatewayModal.sessionData && (
+                <form onSubmit={handleConfirmGatewayWebhook} className="space-y-4">
+                  <div className="p-3.5 bg-slate-900 text-white rounded-2xl flex justify-between items-center">
+                    <div>
+                      <span className="text-[10px] text-slate-400 uppercase block">Merchant: {gatewayModal.sessionData.merchantName}</span>
+                      <span className="font-mono text-xs text-amber-300">{gatewayModal.sessionData.gatewayTxId}</span>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-[10px] text-slate-400 block">Total BDT</span>
+                      <span className="font-mono text-base font-extrabold text-emerald-400">
+                        Tk. {Number(gatewayModal.sessionData.amount).toLocaleString()}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      {gatewayModal.gateway === 'ONLINE_GATEWAY' ? 'Sandbox Card Number' : 'Mobile Wallet Account Number'}
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={gatewayModal.accountNumber}
+                      onChange={(e) => setGatewayModal({ ...gatewayModal, accountNumber: e.target.value })}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-mono font-bold"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      Sandbox OTP Verification Code (Use <span className="font-mono text-pink-600">123456</span>)
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={gatewayModal.otpCode}
+                      onChange={(e) => setGatewayModal({ ...gatewayModal, otpCode: e.target.value })}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-mono font-bold tracking-widest text-center text-base"
+                    />
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setGatewayModal({ ...gatewayModal, step: 'config' })}
+                      className="w-1/3 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition"
+                    >
+                      Back
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={processingGateway}
+                      className="w-2/3 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-md transition"
+                    >
+                      {processingGateway ? 'Verifying IPN Webhook...' : 'Confirm & Auto-Verify Payment'}
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {gatewayModal.step === 'success' && (
+                <div className="text-center space-y-4 py-2">
+                  <div className="w-14 h-14 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto">
+                    <CheckCircle className="w-8 h-8" />
+                  </div>
+                  <div>
+                    <h4 className="text-base font-extrabold text-slate-900">Instant IPN Reconciliation Complete!</h4>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Your payment has been automatically verified and posted to the double-entry student ledger.
+                    </p>
+                  </div>
+                  <div className="p-3 bg-slate-50 border border-slate-200 rounded-2xl text-left font-mono text-[11px] space-y-1">
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Transaction Ref:</span>
+                      <span className="font-bold text-slate-900">{gatewayModal.receiptData?.transactionReference}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Amount Verified:</span>
+                      <span className="font-bold text-emerald-700">Tk. {Number(gatewayModal.receiptData?.amount).toLocaleString()}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Status:</span>
+                      <span className="font-bold text-emerald-700">COMPLETED (AUTO-RECONCILED)</span>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setGatewayModal({ ...gatewayModal, isOpen: false, step: 'config' })}
+                    className="w-full py-2.5 bg-[#0f2b5c] hover:bg-blue-950 text-white font-bold rounded-xl transition"
+                  >
+                    Return to Student Portal
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
